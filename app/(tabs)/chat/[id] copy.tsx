@@ -13,14 +13,9 @@ import {
   Alert,
   RefreshControl,
   Pressable,
-  Image,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
-import { decode } from 'base64-arraybuffer';
 import { chatService } from '../../../services/chatService';
 import { supabase, Message, Chat } from '../../../lib/supabase';
 
@@ -57,126 +52,8 @@ export default function ChatRoom() {
   const [editingMessage, setEditingMessage] = useState<any | null>(null);
   const [replyingTo, setReplyingTo] = useState<any | null>(null);
 
-  // Media and Hardware States
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
-
-  // --- Helper Functions ---
-
-  const checkFileSize = (sizeInBytes: number, type: string) => {
-    const sizeInMB = sizeInBytes / (1024 * 1024);
-    const limits: Record<string, number> = {
-      image: 2,   // 2MB Limit as requested
-      video: 25,
-      audio: 2,
-    };
-
-    if (sizeInMB > limits[type]) {
-      Alert.alert("File too large", `Maximum size for ${type} is ${limits[type]}MB. Your file is ${sizeInMB.toFixed(1)}MB.`);
-      return false;
-    }
-    return true;
-  };
-
-  const uploadFile = async (uri: string, type: string) => {
-  const ext = uri.split('.').pop();
-  const fileName = `${Date.now()}.${ext}`;
-  const filePath = `${chatId}/${fileName}`;
-  
-  // Changed FileSystem.EncodingType.Base64 to 'base64'
-  const base64 = await FileSystem.readAsStringAsync(uri, { 
-    encoding: 'base64' 
-  });
-  
-  const { error } = await supabase.storage
-    .from('chat-attachments')
-    .upload(filePath, decode(base64), { 
-      contentType: type === 'image' ? 'image/jpeg' : type === 'video' ? 'video/mp4' : 'audio/m4a' 
-    });
-
-  if (error) throw error;
-  const { data } = supabase.storage.from('chat-attachments').getPublicUrl(filePath);
-  return data.publicUrl;
-};
-
-  // --- Media Handlers ---
-
-  const pickMedia = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 0.7,
-    });
-
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      const type = asset.type === 'video' ? 'video' : 'image';
-      
-      const info = await FileSystem.getInfoAsync(asset.uri);
-      const actualSize = info.exists ? info.size : 0;
-
-      if (!checkFileSize(actualSize, type)) return;
-      handleMediaSend(asset.uri, type);
-    }
-  };
-
-  const startRecording = async () => {
-    try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      setRecording(recording);
-      setIsRecording(true);
-    } catch (err) {
-      Alert.alert('Error', 'Could not start recording');
-    }
-  };
-
-  const stopRecording = async () => {
-    if (!recording) return;
-    setIsRecording(false);
-    try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      if (uri) {
-        const info = await FileSystem.getInfoAsync(uri);
-        if (info.exists && !checkFileSize(info.size, 'audio')) {
-          setRecording(null);
-          return;
-        }
-        handleMediaSend(uri, 'audio');
-      }
-      setRecording(null);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleMediaSend = async (uri: string, type: 'image' | 'video' | 'audio') => {
-    setSending(true);
-    try {
-      const fileUrl = await uploadFile(uri, type);
-      const payload: any = { 
-        chat_id: chatId, 
-        sender_id: currentUserId, 
-        content: `Sent a ${type}`, 
-        file_url: fileUrl, 
-        file_type: type 
-      };
-      if (replyingTo) payload.parent_id = replyingTo.id;
-      const { data, error } = await supabase.from('messages').insert([payload]).select().single();
-      if (error) throw error;
-      if (data) setMessages(prev => [...prev, data]);
-    } catch (err) {
-      Alert.alert('Upload Error', 'Failed to upload media');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  // --- Core Functions ---
 
   const fetchData = useCallback(async (showLoadingSpinner = false) => {
     if (showLoadingSpinner) setLoading(true);
@@ -237,7 +114,10 @@ export default function ChatRoom() {
   const deleteMessage = async (msgId: string) => {
     try {
       const { error } = await supabase.from('messages').delete().eq('id', msgId);
+      
       if (error) throw error;
+
+      // Filter out the deleted message AND any messages that were replying to it
       setMessages(prev => prev.filter(m => m.id !== msgId && m.parent_id !== msgId));
       setActiveMenuId(null);
     } catch (err) {
@@ -253,19 +133,13 @@ export default function ChatRoom() {
 
     try {
       if (editingMessage) {
-        const { data, error } = await supabase
-          .from('messages')
-          .update({ content: text, is_edited: true })
-          .eq('id', editingMessage.id)
-          .select();
-        if (error) throw error;
+        await supabase.from('messages').update({ content: text, is_edited: true }).eq('id', editingMessage.id);
         setMessages(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: text, is_edited: true } : m));
         setEditingMessage(null);
       } else {
         const payload: any = { chat_id: chatId, sender_id: currentUserId, content: text };
         if (replyingTo) payload.parent_id = replyingTo.id;
-        const { data, error } = await supabase.from('messages').insert([payload]).select().single();
-        if (error) throw error;
+        const { data } = await supabase.from('messages').insert([payload]).select().single();
         if (data) setMessages(prev => [...prev, data]);
       }
       setNewMessage('');
@@ -304,21 +178,13 @@ export default function ChatRoom() {
             </View>
           )}
 
-          {item.file_type === 'image' ? (
-            <Image source={{ uri: item.file_url }} style={styles.messageImage} />
-          ) : item.file_type === 'audio' ? (
-            <View style={styles.audioBubble}>
-              <Ionicons name="mic" size={18} color="#000" />
-              <Text style={styles.text}> Voice Message</Text>
-            </View>
-          ) : (
-            <Text style={[styles.text, mine ? styles.myText : styles.theirText]}>
-              {item.content}
-            </Text>
-          )}
+          <Text style={[styles.text, mine ? styles.myText : styles.theirText]}>
+            {item.content}
+          </Text>
 
           {isMenuOpen && (
             <View style={[styles.menuDropdown, mine ? { right: 100 } : { left: 0 }]}>
+              {/* Only show Reply for others */}
               {!mine && (
                 <TouchableOpacity style={styles.menuBtn} onPress={() => startReply(item)}>
                   <Ionicons name="arrow-undo-outline" size={14} color="#374151" />
@@ -326,6 +192,7 @@ export default function ChatRoom() {
                 </TouchableOpacity>
               )}
               
+              {/* Only show Edit for mine */}
               {mine && (
                 <TouchableOpacity style={styles.menuBtn} onPress={() => startEdit(item)}>
                   <Ionicons name="pencil-outline" size={14} color="#374151" />
@@ -333,6 +200,7 @@ export default function ChatRoom() {
                 </TouchableOpacity>
               )}
 
+              {/* Show Delete for everyone (as per request: mine (edit/delete) others (reply/delete)) */}
               <TouchableOpacity style={styles.menuBtn} onPress={() => confirmDelete(item.id)}>
                 <Ionicons name="trash-outline" size={14} color="#ef4444" />
                 <Text style={[styles.menuBtnText, { color: '#ef4444' }]}>Delete</Text>
@@ -410,38 +278,18 @@ export default function ChatRoom() {
           )}
 
           <View style={styles.inputBar}>
-            <TouchableOpacity onPress={pickMedia} style={styles.attachBtn}>
-              <Ionicons name="add" size={28} color="#2255ee" />
-            </TouchableOpacity>
-
             <TextInput
               ref={inputRef}
               style={styles.input}
-              placeholder={isRecording ? "Recording..." : "Type a message…"}
+              placeholder="Type a message…"
               value={newMessage}
               onChangeText={setNewMessage}
               multiline
               placeholderTextColor="#9ca3af"
-              editable={!isRecording}
             />
-
-            {newMessage.trim() || isRecording ? (
-              <TouchableOpacity 
-                onPress={isRecording ? stopRecording : handleSend} 
-                style={[styles.send, isRecording && { backgroundColor: '#ef4444' }]} 
-                disabled={sending}
-              >
-                {sending ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name={isRecording ? "stop" : "send"} size={18} color="#fff" />
-                )}
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity onPress={startRecording} style={styles.send}>
-                <Ionicons name="mic" size={20} color="#fff" />
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity onPress={handleSend} style={styles.send} disabled={sending || !newMessage.trim()}>
+              {sending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
+            </TouchableOpacity>
           </View>
         </Pressable>
       </KeyboardAvoidingView>
@@ -516,9 +364,4 @@ const styles = StyleSheet.create({
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', padding: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6', backgroundColor: '#fff' },
   input: { flex: 1, backgroundColor: '#e9faff', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#111', borderWidth: 3, borderColor: '#e5e7eb' },
   send: { marginLeft: 10, backgroundColor: '#2255ee', borderRadius: 25, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-
-  // Added Media Styles
-  attachBtn: { marginRight: 8, marginBottom: 8 },
-  messageImage: { width: 200, height: 200, borderRadius: 12, marginBottom: 4 },
-  audioBubble: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
 });

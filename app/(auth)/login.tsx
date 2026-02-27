@@ -114,6 +114,24 @@ export default function Login() {
 
   const biometricIcon = (Platform.OS === 'ios' ? 'face-id' : 'finger-print') as any;
 
+  const confirmLogout = () => {
+  Alert.alert(
+    "Clear Session?",
+    "This will log you out and clear all saved data for this account.",
+    [
+      {
+        text: "Cancel",
+        style: "cancel"
+      },
+      { 
+        text: "Clear & Logout", 
+        onPress: () => handleHardLogout(), // Only runs if they click this
+        style: "destructive" 
+      }
+    ]
+  );
+};
+
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
@@ -189,12 +207,11 @@ export default function Login() {
           <Text style={styles.linkText}>New here? <Text style={styles.linkTextBold}>Create an account</Text></Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={{ marginTop: 20 }} onPress={handleHardLogout}>
+        <TouchableOpacity style={{ marginTop: 20 }} onPress={confirmLogout}>
           <Text style={{ color: '#9ca3af', textAlign: 'center', fontSize: 13 }}>
-            Want to use a different account? <Text style={{ fontWeight: 'bold', color: '#2255ee' }}>Clear session</Text>
+            Want to use a different account? <Text style={{ fontWeight: 'bold', color: '#2255ee', fontSize:16 }}>Clear session</Text>
           </Text>
         </TouchableOpacity>
-
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -212,12 +229,12 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: 12 },
   input: { flex: 1, fontSize: 16, color: '#111827' },
   forgotText: { color: '#2255ee', fontWeight: '600', fontSize: 14 },
-  buttonRow: { flexDirection: 'row', gap: 12, marginTop: 32 },
+  buttonRow: { flexDirection: 'row', gap: 12, marginTop: 32, marginBottom:10 },
   button: { flex: 1, backgroundColor: '#2255ee', height: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   biometricButton: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#f0f4ff', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#dbe4ff' },
-  linkButton: { marginTop: 32, alignItems: 'center' },
+  linkButton: { marginTop: 32, marginBottom: 20, alignItems: 'center' },
   linkText: { color: '#6b7280', fontSize: 15 },
   linkTextBold: { color: '#2255ee', fontWeight: '700' },
 });
