@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -11,13 +12,67 @@ import {
   View,
 } from "react-native";
 import { useTheme } from "../../context/ThemeContext";
+import { router } from "expo-router";
+import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../context/AuthContext";
 
 export default function Settings() {
   const [notifications, setNotifications] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const { isDark, toggleTheme } = useTheme();
+  const { setIsVerified } = useAuth();
 
   const toggleNotifications = () =>
     setNotifications((previousState) => !previousState);
+
+  async function handleDeleteAccount() {
+    Alert.alert(
+      "Delete Account",
+      "This will permanently delete all your data including listings, chats, and favorites. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () =>
+            Alert.alert(
+              "Are you absolutely sure?",
+              "Type confirm to proceed — your account will be gone forever.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Yes, Delete",
+                  style: "destructive",
+                  onPress: async () => {
+                    setDeleting(true);
+                    try {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (!user) throw new Error("Not authenticated");
+
+                      const uid = user.id;
+                      // Delete user data in order (messages → chats → products → favorites → profile)
+                      await supabase.from("messages").delete().eq("sender_id", uid);
+                      await supabase.from("chats").delete().or(`buyer_id.eq.${uid},seller_id.eq.${uid}`);
+                      await supabase.from("products").delete().eq("user_id", uid);
+                      await supabase.from("favorites").delete().eq("user_id", uid);
+                      await supabase.from("users").delete().eq("id", uid);
+                      // Note: deleting the auth user itself requires a Supabase Edge Function with service role key
+                      await supabase.auth.signOut();
+                      setIsVerified(false);
+                      router.replace("/(auth)/login");
+                    } catch (e: any) {
+                      Alert.alert("Error", e.message || "Failed to delete account.");
+                    } finally {
+                      setDeleting(false);
+                    }
+                  },
+                },
+              ]
+            ),
+        },
+      ]
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, isDark && styles.containerDark]}>
@@ -55,7 +110,7 @@ export default function Settings() {
 
           <View style={[styles.divider, isDark && styles.dividerDark]} />
 
-          <View style={styles.row}>
+          {/* <View style={styles.row}>
             <View style={styles.rowLeft}>
               <View
                 style={[
@@ -80,7 +135,10 @@ export default function Settings() {
               onValueChange={toggleTheme}
               value={isDark}
             />
-          </View>
+          </View> */}
+
+
+
         </View>
 
         <View style={[styles.section, isDark && styles.sectionDark]}>
@@ -91,12 +149,7 @@ export default function Settings() {
           </Text>
           <TouchableOpacity
             style={styles.row}
-            onPress={() =>
-              Alert.alert(
-                "Change Password",
-                "This feature will be available soon.",
-              )
-            }
+            onPress={() => router.push("/change-password")}
           >
             <View style={styles.rowLeft}>
               <View
@@ -110,6 +163,30 @@ export default function Settings() {
               </View>
               <Text style={[styles.rowLabel, isDark && styles.textDark]}>
                 Change Password
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+          </TouchableOpacity>
+
+          <View style={[styles.divider, isDark && styles.dividerDark]} />
+
+          <TouchableOpacity
+            style={styles.row}
+            onPress={handleDeleteAccount}
+            disabled={deleting}
+          >
+            <View style={styles.rowLeft}>
+              <View
+                style={[styles.iconContainer, { backgroundColor: "#fee2e2" }]}
+              >
+                {deleting ? (
+                  <ActivityIndicator size={16} color="#ef4444" />
+                ) : (
+                  <Ionicons name="trash-outline" size={20} color="#ef4444" />
+                )}
+              </View>
+              <Text style={[styles.rowLabel, { color: "#ef4444" }]}>
+                Delete Account
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />

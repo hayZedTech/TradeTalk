@@ -120,6 +120,66 @@ export const productService = {
     }
   },
 
+  async updateProduct(id: string, product: {
+    title: string;
+    price: number;
+    description: string;
+    category: string;
+    condition: string;
+    imageUri: string;
+  }): Promise<any> {
+    try {
+      let finalImageUrl = product.imageUri;
+
+      // Check if imageUri is a local file (needs upload) or already a URL (no change)
+      if (product.imageUri.startsWith('file://') || product.imageUri.startsWith('content://')) {
+        console.log('Uploading new image to Cloudinary...');
+        
+        const formData = new FormData();
+        formData.append('file', {
+          uri: product.imageUri,
+          type: 'image/jpeg',
+          name: 'update.jpg',
+        } as any);
+        formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+
+        const response = await fetch(
+          `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
+          {
+            method: 'POST',
+            body: formData,
+          }
+        );
+
+        if (!response.ok) throw new Error('Cloudinary upload failed');
+        
+        const cloudinaryData = await response.json();
+        finalImageUrl = cloudinaryData.secure_url;
+      }
+
+      // Update the database record
+      const { data, error } = await supabase
+        .from('products')
+        .update({
+          title: product.title,
+          price: product.price,
+          description: product.description,
+          category: product.category,
+          condition: product.condition,
+          image_url: finalImageUrl,
+        })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('Error updating product:', error);
+      throw new Error(error.message || 'Failed to update product');
+    }
+  },
+
   async deleteProduct(id: string): Promise<void> {
     const { error } = await supabase
       .from('products')

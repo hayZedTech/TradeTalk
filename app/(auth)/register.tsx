@@ -16,8 +16,8 @@ export default function Register() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  async function handleRegister() {
-    // Basic Validations
+async function handleRegister() {
+    // 1. Basic Validations
     if (!email || !password || !username) {
       Alert.alert('Missing Fields', 'Please fill in all details.');
       return;
@@ -32,35 +32,51 @@ export default function Register() {
     }
 
     setLoading(true);
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { username } },
-    });
 
-    if (error) {
-      Alert.alert('Error', error.message);
-      setLoading(false);
-    } else if (data.user) {
-      const { error: profileError } = await supabase
-        .from('users')
-        .insert({
-          id: data.user.id,
-          email: email.toLowerCase(),
-          username: username,
-        });
+    try {
+      // 2. Sign up the user in Supabase Auth
+      // The trigger 'on_auth_user_created' in your database handles the public.users insert.
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: { 
+          data: { username: username.trim() }, 
+          emailRedirectTo: 'tradetalk://login' 
+        },
+      });
 
-      if (profileError) {
-        Alert.alert('Profile Error', profileError.message);
+      if (signUpError) {
+        // Handle the specific case where the username is already taken in public.users
+        // This error comes back from your database via the trigger
+        if (signUpError.message.includes('users_username_key')) {
+          Alert.alert('Username Taken', 'This username is already in use. Please try another.');
+        } 
+        // Handle the case where the email is already registered in Auth
+        else if (signUpError.message.includes('User already registered')) {
+          Alert.alert('Account Exists', 'This email is already registered. Please login instead.');
+        } 
+        else {
+          throw signUpError;
+        }
         setLoading(false);
-      } else {
-        // Set verification to true so Root Layout allows entry to tabs
-        setIsVerified(true);
-        router.replace('/(tabs)');
+        return;
       }
+
+      // 3. Success - Confirmation Alert
+      setLoading(false);
+      Alert.alert(
+        'Registration Successful',
+        'We sent a confirmation link to ' + email.toLowerCase() + '. Please check your inbox before logging in.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+
+    } catch (error: any) {
+      setLoading(false);
+      Alert.alert('Error', error.message || 'An unexpected error occurred.');
     }
   }
 
+  
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
@@ -146,7 +162,7 @@ export default function Register() {
           onPress={() => router.back()}
         >
           <Text style={styles.linkText}>
-            Already have an account? <Text style={{ fontWeight: '700' }}>Sign In</Text>
+            Already have an account? <Text style={styles.linkTextBold}>Sign In</Text>
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -169,11 +185,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#111827',
     letterSpacing: -0.5,
+    textAlign:"center"
   },
   subtitle: {
     fontSize: 16,
     color: '#6b7280',
     marginTop: 8,
+    textAlign:"center"
   },
   form: {
     gap: 16,
@@ -225,4 +243,5 @@ const styles = StyleSheet.create({
     color: '#4b5563',
     fontSize: 15,
   },
+  linkTextBold: { color: '#2255ee',  textDecorationLine:"underline", },
 });

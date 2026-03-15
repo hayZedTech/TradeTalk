@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,19 +14,16 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  RefreshControl, // Added for swipe-to-refresh
 } from "react-native";
 import { productService } from "../../../services/productService";
 import { supabase } from "@/lib/supabase";
+// Import the media helper
+import { validateAndProcessMedia } from "../../../utils/mediaHelper";
 
-const CATEGORIES = [
-  "Electronics",
-  "Clothing",
-  "Books",
-  "Furniture",
-  "Sports",
-  "Other",
-];
-const CONDITIONS = ["New", "Like New", "Good", "Fair", "Poor"];
+const CATEGORIES = ["All", "Electronics", "Fashion", "Automobile", "Home", "Sports", "Books", "Health & Beauty",
+  "Groceries", "Toys & Games", "Pet Supplies", "Office & Industrial", "Art & Collectibles", "Other"];
+const CONDITIONS = ["New", "Open Box", "Excellent", "Gently Used", "Fair", "Poor"];
 
 export default function AddProduct() {
   const [title, setTitle] = useState("");
@@ -36,6 +33,29 @@ export default function AddProduct() {
   const [condition, setCondition] = useState(CONDITIONS[0]);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [processingImage, setProcessingImage] = useState(false);
+  const [refreshing, setRefreshing] = useState(false); // State for Pull-to-refresh
+
+  // Function to clear the form
+  const resetForm = () => {
+    setTitle("");
+    setPrice("");
+    setDescription("");
+    setCategory(CATEGORIES[0]);
+    setCondition(CONDITIONS[0]);
+    setImageUri(null);
+    setProcessingImage(false);
+  };
+
+  // Logic for the Slide/Swipe down refresh
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    resetForm();
+    // Simulate a brief delay for better UX
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 800);
+  }, []);
 
   async function pickImage() {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -46,8 +66,47 @@ export default function AddProduct() {
     });
 
     if (!result.canceled) {
-      setImageUri(result.assets[0].uri);
+      setProcessingImage(true);
+      const processedUri = await validateAndProcessMedia(result.assets[0].uri, 'image');
+      if (processedUri) {
+        setImageUri(processedUri);
+      }
+      setProcessingImage(false);
     }
+  }
+
+  async function takePhoto() {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission Denied",
+        "We need camera access to take a photo of your product."
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setProcessingImage(true);
+      const processedUri = await validateAndProcessMedia(result.assets[0].uri, 'image');
+      if (processedUri) {
+        setImageUri(processedUri);
+      }
+      setProcessingImage(false);
+    }
+  }
+
+  function handleImagePress() {
+    Alert.alert("Add Product Photo", "Select an option", [
+      { text: "Take Photo", onPress: takePhoto },
+      { text: "Choose from Gallery", onPress: pickImage },
+      { text: "Cancel", style: "cancel" },
+    ]);
   }
 
   async function handleSubmit() {
@@ -58,7 +117,9 @@ export default function AddProduct() {
 
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         Alert.alert("Error", "You must be logged in to list an item.");
         setLoading(false);
@@ -74,6 +135,8 @@ export default function AddProduct() {
         imageUri,
       });
 
+      resetForm();
+      Alert.alert("Success", "Product listed successfully!");
       router.replace("/(tabs)");
     } catch (error: any) {
       Alert.alert("Error", error.message || "Failed to add product");
@@ -91,24 +154,45 @@ export default function AddProduct() {
         style={styles.container}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh}
+            tintColor="#2255ee" // iOS spinner color
+            colors={["#2255ee"]} // Android spinner colors
+          />
+        }
       >
-        <Text style={styles.title}>List an Item</Text>
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>List an Item</Text>
+          {/* Note: Refresh button removed as per swipe logic request */}
+        </View>
 
-        {/* Image Picker */}
+        {/* Image Picker Box */}
         <TouchableOpacity
-          style={[styles.imagePicker, !imageUri && styles.dashedBorder]}
-          onPress={pickImage}
+          style={[
+            styles.imagePicker,
+            !imageUri && styles.dashedBorder,
+            imageUri && { backgroundColor: "#f0fdf4", borderColor: "#16a34a", borderWidth: 1 }
+          ]}
+          onPress={handleImagePress}
           activeOpacity={0.7}
+          disabled={processingImage}
         >
-          {imageUri ? (
+          {processingImage ? (
+            <View style={styles.innerContainer}>
+              <ActivityIndicator color="#2255ee" />
+              <Text style={styles.placeholderText}>Optimizing...</Text>
+            </View>
+          ) : imageUri ? (
             <View style={styles.imageWrapper}>
               <Image source={{ uri: imageUri }} style={styles.previewImage} />
               <View style={styles.editBadge}>
-                <Ionicons name="pencil" size={16} color="#fff" />
+                <Ionicons name="pencil" size={12} color="#fff" />
               </View>
             </View>
           ) : (
-            <View style={styles.placeholder}>
+            <View style={styles.innerContainer}>
               <View style={styles.iconCircle}>
                 <Ionicons name="camera" size={30} color="#2255ee" />
               </View>
@@ -138,7 +222,7 @@ export default function AddProduct() {
           </View>
           <View style={styles.priceInputContainer}>
             <View style={styles.currencyPrefix}>
-              <Text style={styles.currencyText}>$</Text>
+              <Text style={styles.currencyText}>₦</Text>
             </View>
             <TextInput
               style={styles.priceInput}
@@ -243,24 +327,31 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 60,
   },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+    marginTop: Platform.OS === "ios" ? 40 : 20,
+  },
   title: {
     fontSize: 32,
     fontWeight: "900",
     color: "#000",
-    marginBottom: 24,
-    marginTop: Platform.OS === "ios" ? 40 : 20,
   },
   imagePicker: {
     width: "100%",
     height: 160,
     backgroundColor: "#fff",
     borderRadius: 20,
-    overflow: "hidden",
     marginBottom: 24,
     elevation: 2,
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
   },
   dashedBorder: {
     borderWidth: 2,
@@ -268,12 +359,20 @@ const styles = StyleSheet.create({
     borderStyle: "dashed",
   },
   imageWrapper: {
-    flex: 1,
+    width: '100%',
+    height: '100%',
   },
   previewImage: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover",
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  innerContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
   },
   editBadge: {
     position: "absolute",
@@ -282,12 +381,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#2255ee",
     padding: 8,
     borderRadius: 20,
-  },
-  placeholder: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 12,
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   iconCircle: {
     backgroundColor: "#eef2ff",
@@ -369,7 +464,8 @@ const styles = StyleSheet.create({
   },
   chip: {
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 10,
+    marginVertical: 10,
     backgroundColor: "#fff",
     borderRadius: 30,
     borderWidth: 1.5,
@@ -389,7 +485,7 @@ const styles = StyleSheet.create({
   },
   submitButton: {
     backgroundColor: "#2255ee",
-    paddingVertical: 20,
+    paddingVertical: 15,
     borderRadius: 20,
     alignItems: "center",
     marginTop: 10,
@@ -411,4 +507,4 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "800",
   },
-});
+});  

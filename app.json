@@ -19,6 +19,7 @@
         "NSFaceIDUsageDescription": "TradeTalk uses FaceID to provide quick and secure access to your account.",
         "NSCameraUsageDescription": "TradeTalk needs access to your camera to upload product photos and media.",
         "NSPhotoLibraryUsageDescription": "TradeTalk needs access to your photos to upload product photos and media.",
+        "NSPhotoLibraryAddUsageDescription": "TradeTalk needs access to save photos and videos to your gallery.",
         "NSMicrophoneUsageDescription": "TradeTalk needs access to your microphone to record voice messages in chat."
       }
     },
@@ -41,6 +42,14 @@
       ]
     },
     "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow TradeTalk to access your photos",
+          "savePhotosPermission": "Allow TradeTalk to save photos to your library.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
       [
         "expo-local-authentication",
         {
@@ -68,7 +77,8 @@
         }
       ],
       "expo-font",
-      "expo-router"
+      "expo-router",
+      "react-native-compressor"
     ],
     "extra": {
       "router": {},

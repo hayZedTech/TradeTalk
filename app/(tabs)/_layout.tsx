@@ -1,16 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
+import {StatusBar} from "expo-status-bar"
+
 
 export default function TabsLayout() {
   return (
+    <>
+    <StatusBar style="light"  />
     <Tabs
-      screenOptions={{
-        headerStyle: { backgroundColor: "#2255ee" },
-        headerTintColor: "#fff",
-        headerTitleStyle: { fontWeight: "bold" },
-        tabBarActiveTintColor: "#2255ee",
-        tabBarInactiveTintColor: "#888",
-      }}
+      screenOptions={{ 
+      headerStyle: { backgroundColor: '#2255ee' },
+      headerTintColor: '#fff',
+      headerTitleStyle: { fontWeight: 'bold' },
+    }}
     >
       <Tabs.Screen
         name="index"
@@ -25,13 +27,25 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="chat-list"
         options={{
+          title: "Deals",
+          tabBarIcon: ({ size, color }) => (
+            <Ionicons name="paper-plane" size={size} color={color} />
+          ),
+        }}
+      />
+     
+
+      <Tabs.Screen
+        name="chatroom/index"
+        options={{
           title: "Chats",
           tabBarIcon: ({ size, color }) => (
             <Ionicons name="chatbubbles" size={size} color={color} />
           ),
         }}
       />
-      <Tabs.Screen
+
+       <Tabs.Screen
         name="profile"
         options={{
           title: "Profile",
@@ -46,7 +60,7 @@ export default function TabsLayout() {
         name="edit-profile"
         options={{ href: null, title: "Edit Profile" }}
       />
-      <Tabs.Screen name="chat/[id]" options={{ href: null, title: "Chats" }} />
+     
       <Tabs.Screen
         name="product/[id]"
         options={{ href: null, title: "Products" }}
@@ -75,7 +89,39 @@ export default function TabsLayout() {
         options={{ href: null, title: "Edit Products" }}
       />
 
+      <Tabs.Screen
+        name="change-password"
+        options={{ href: null, title: "Change Password" }}
+      />
+
+
+       <Tabs.Screen name="chat/[id]" options={{ href: null, title: "Chats" }} />
+
+      <Tabs.Screen
+        name="chat/MessageItem"  options={{ href: null, title: "" }} 
+      />
+
+       <Tabs.Screen
+        name="chat/ChatHeader"  options={{ href: null, title: "" }} 
+      />
+
+      <Tabs.Screen
+        name="chat/ChatInputBar"  options={{ href: null, title: "" }} 
+      />
+
+      <Tabs.Screen
+        name="chat/ImageZoomModal"  options={{ href: null, title: "" }} 
+      />
+
+       <Tabs.Screen
+        name="chat/PreparingFileOverlay"  options={{ href: null, title: "" }} 
+      />
+
+      
+
       
     </Tabs>
+    
+    </>
   );
 }

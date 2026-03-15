@@ -19,7 +19,8 @@ import {
 import { Product, supabase } from "../../lib/supabase";
 import { productService } from "../../services/productService";
 
-const CATEGORIES = ["All", "Electronics", "Fashion", "Home", "Sports", "Books", "Other"];
+const CATEGORIES = ["All", "Electronics", "Fashion", "Automobile", "Home", "Sports", "Books", "Health & Beauty",
+  "Groceries", "Toys & Games", "Pet Supplies", "Office & Industrial", "Art & Collectibles", "Other"];
 
 export default function Feed() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -173,11 +174,15 @@ export default function Feed() {
             <TouchableOpacity
               onPress={() => toggleLike(item.id)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={[
+                styles.heartBtn,
+                isLiked && { backgroundColor: "#2255ee" },
+              ]}
             >
               <Ionicons
                 name={isLiked ? "heart" : "heart-outline"}
-                size={20}
-                color={isLiked ? "#ef4444" : "#6b7280"}
+                size={18}
+                color={isLiked ? "#000" : "#6b7280"}
               />
             </TouchableOpacity>
           </View>
@@ -298,7 +303,7 @@ export default function Feed() {
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#2255ee" />
-            <Text style={styles.loadingText}>Finding fresh trades...</Text>
+            <Text style={styles.loadingText}>Finding trades...</Text>
           </View>
         ) : (
           <FlatList
@@ -392,19 +397,23 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#f3f4f6",
+    backgroundColor: "#eff",
     marginHorizontal: 20,
     marginTop: 10,
     marginBottom: 8,
     paddingHorizontal: 15,
     height: 50,
     borderRadius: 14,
+     borderWidth: 2,
+    borderColor: '#e5e7eb',
   },
   searchInput: {
     flex: 1,
     marginLeft: 10,
     fontSize: 16,
     color: "#1f2937",
+     backgroundColor: '#fff',
+     borderRadius: 10,
   },
   categoryList: {
     paddingHorizontal: 20,
@@ -599,6 +608,13 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontWeight: "600",
   },
+  heartBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   emptyContainer: {
     marginTop: 100,
     alignItems: "center",
@@ -609,5 +625,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#9ca3af",
     fontWeight: "500",
+    width:300,
+    textAlign:"center"
   },
 });

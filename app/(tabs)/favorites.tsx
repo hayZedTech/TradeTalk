@@ -112,8 +112,9 @@ export default function Favorites() {
               {item.owner?.username || "User"}
             </Text>
           </View>
-          <TouchableOpacity onPress={() => handleRemoveFavorite(item.id)}>
-            <Ionicons name="heart" size={20} color="#ef4444" />
+          <TouchableOpacity onPress={() => handleRemoveFavorite(item.id)} style={[
+                styles.heartBtn,{ backgroundColor: "#2255ee" }]}>
+            <Ionicons name="heart" size={15} color="#000" />
           </TouchableOpacity>
         </View>
       </View>
@@ -222,4 +223,11 @@ const styles = StyleSheet.create({
   ownerText: { fontSize: 12, color: "#6b7280", marginLeft: 4, flex: 1 },
   empty: { alignItems: "center", marginTop: 100 },
   emptyText: { marginTop: 16, fontSize: 16, color: "#6b7280" },
+  heartBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    justifyContent: "center",
+    alignItems: "center",
+  },
 });

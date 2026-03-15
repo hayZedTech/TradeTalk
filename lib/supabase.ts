@@ -1,9 +1,9 @@
-import 'react-native-url-polyfill/auto';
-import { createClient } from '@supabase/supabase-js';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createClient } from "@supabase/supabase-js";
+import "react-native-url-polyfill/auto";
 
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn("Supabase credentials missing! Auth will fail.");
@@ -41,6 +41,15 @@ export interface Product {
   owner?: User;
 }
 
+export interface Reaction {
+  id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  user?: User; // Optional: if we want to show who reacted
+  created_at: string;
+}
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -48,11 +57,28 @@ export interface Message {
   content: string;
   created_at: string;
   sender?: User;
+
+  // -- Optional fields --
+  parent_id?: string | null;
+
+  file_url?: string | null;
+  file_type?: "image" | "video" | "audio" | null;
+
+  is_delivered?: boolean;
+  delivered_at?: string | null;
+  is_read?: boolean;
+  read_at?: string | null;
+  is_edited?: boolean;
+  reactions?: Reaction[];
 }
+
+/** 👇 NEW: Chat type */
+export type ChatType = "product" | "direct";
 
 export interface Chat {
   id: string;
-  product_id: string;
+  type: ChatType; // 👈 added
+  product_id?: string | null; // 👈 now optional for direct chats
   buyer_id: string;
   seller_id: string;
   created_at: string;
@@ -60,5 +86,5 @@ export interface Chat {
   last_message?: Message;
   buyer?: User;
   seller?: User;
-  messages?: Message[]; 
+  messages?: Message[];
 }

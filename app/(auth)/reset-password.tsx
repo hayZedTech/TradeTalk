@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -20,6 +20,25 @@ export default function ResetPassword() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    // Verify that the user actually has a session (from the recovery link)
+    // before letting them interact with the form.
+    const checkSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) {
+        Alert.alert(
+          'Link Expired', 
+          'This reset link is no longer valid. Please request a new one.',
+          [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
+        );
+      }
+      setCheckingSession(false);
+    };
+
+    checkSession();
+  }, []);
 
   async function handleReset() {
     if (!password || password.length < 6) {
@@ -34,18 +53,28 @@ export default function ResetPassword() {
 
     setLoading(true);
     
-    // Supabase handles the recovery token behind the scenes when 
-    // the app is opened via the recovery deep link.
+    // updateUsers updates the password for the currently logged-in user 
+    // (which is the user the recovery link authenticated).
     const { error } = await supabase.auth.updateUser({ password });
 
     setLoading(false);
     if (error) {
       Alert.alert('Error', error.message);
     } else {
+      // Very important: Sign out after password reset to clear the recovery session
+      // then force them to log in with the new credentials.
+      await supabase.auth.signOut();
       Alert.alert('Success', 'Your password has been updated. Please login.');
-      // After password update, we redirect back to login
       router.replace('/(auth)/login');
     }
+  }
+
+  if (checkingSession) {
+    return (
+      <View style={[styles.scrollContainer, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#2255ee" />
+      </View>
+    );
   }
 
   return (
@@ -70,6 +99,7 @@ export default function ResetPassword() {
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
+              autoCapitalize="none"
             />
             <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
               <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color="#9ca3af" />
@@ -86,6 +116,7 @@ export default function ResetPassword() {
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry={!showPassword}
+              autoCapitalize="none"
             />
           </View>
 

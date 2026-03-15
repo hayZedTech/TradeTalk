@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Platform,
   RefreshControl,
   SafeAreaView,
@@ -13,6 +14,8 @@ import {
   TouchableOpacity,
   View,
   Image,
+  Modal,
+  Pressable,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabase";
@@ -30,6 +33,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ listings: 0, trades: 0, rating: 4.9 });
   const [refreshing, setRefreshing] = useState(false);
+  const [isImageZoomed, setIsImageZoomed] = useState(false); // State for zooming
 
   async function loadProfile() {
     try {
@@ -82,7 +86,7 @@ export default function Profile() {
     }
   }
 
- async function handleLogout() {
+  async function handleLogout() {
     Alert.alert(
       "Logout",
       "Are you sure you want to sign out?",
@@ -134,6 +138,29 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* ZOOM MODAL */}
+      <Modal
+        visible={isImageZoomed}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsImageZoomed(false)}
+      >
+        <Pressable 
+          style={styles.modalOverlay} 
+          onPress={() => setIsImageZoomed(false)}
+        >
+          <View style={styles.modalContent}>
+             {user?.avatar_url && (
+                <Image 
+                  source={{ uri: user.avatar_url }} 
+                  style={styles.zoomedImage} 
+                  resizeMode="contain" 
+                />
+             )}
+          </View>
+        </Pressable>
+      </Modal>
+
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}
@@ -147,14 +174,23 @@ export default function Profile() {
       >
         {/* Profile Header Card */}
         <View style={styles.headerCard}>
-          <View style={styles.avatar}>
-            {user?.avatar_url ? (
-              <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
-            ) : (
-              <Text style={styles.avatarText}>
-                {user?.username?.charAt(0).toUpperCase() || "U"}
-              </Text>
-            )}
+          <View style={styles.avatarContainer}>
+            <TouchableOpacity 
+              activeOpacity={0.8}
+              onPress={() => {
+                if (user?.avatar_url) setIsImageZoomed(true);
+              }}
+              style={styles.avatar}
+            >
+              {user?.avatar_url ? (
+                <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>
+                  {user?.username?.charAt(0).toUpperCase() || "U"}
+                </Text>
+              )}
+            </TouchableOpacity>
+            
             <TouchableOpacity
               style={styles.editAvatarBadge}
               onPress={() =>
@@ -221,13 +257,6 @@ export default function Profile() {
             label="Favorites"
             onPress={() => router.push("/favorites")}
           />
-          {/* <MenuLink
-            icon="shield-checkmark-outline"
-            label="Security & Biometrics"
-            onPress={() =>
-              Alert.alert("Security", "Biometric login is enabled.")
-            }
-          /> */}
           <MenuLink
             icon="settings-outline"
             label="Settings"
@@ -236,9 +265,31 @@ export default function Profile() {
           <MenuLink
             icon="help-circle-outline"
             label="Help & Support"
-            onPress={() =>
-              Alert.alert("Support", "Contact: support@tradetalk.com")
-            }
+            onPress={() => {
+              Alert.alert(
+                "Support",
+                "How would you like to contact us?",
+                [
+                  {
+                    text: "Email Support",
+                    onPress: () => Linking.openURL('mailto:ololadeazeez.m@gmail.com'),
+                  },
+                  {
+                    text: "Call Us",
+                    onPress: () => Linking.openURL('tel:08072178062'),
+                  },
+                  {
+                    text: "WhatsApp",
+                    onPress: () => Linking.openURL('https://wa.me/2348072178062'), 
+                  },
+                  {
+                    text: "Cancel",
+                    style: "cancel",
+                  },
+                ],
+                { cancelable: true }
+              );
+            }}
           />
         </View>
 
@@ -297,7 +348,7 @@ const styles = StyleSheet.create({
   headerCard: {
     alignItems: "center",
     paddingVertical: 30,
-    paddingHorizontal: 20, // Added to prevent text touching screen edges
+    paddingHorizontal: 20,
     backgroundColor: "#fff",
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
@@ -308,6 +359,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
   },
+  avatarContainer: {
+    position: "relative",
+    marginBottom: 15,
+  },
   avatar: {
     width: 90,
     height: 90,
@@ -315,7 +370,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#6366f1",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 15,
+    overflow: "hidden"
   },
   avatarImage: {
     width: 90,
@@ -337,12 +392,13 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 3,
     borderColor: "#fff",
+    zIndex: 10,
   },
   username: {
     fontSize: 22,
     fontWeight: "800",
     color: "#111827",
-    textAlign: "center", // Center aligned for wrapping
+    textAlign: "center",
   },
   email: {
     fontSize: 14,
@@ -371,24 +427,22 @@ const styles = StyleSheet.create({
     marginTop: -30,
     borderRadius: 20,
     paddingVertical: 20,
-    paddingHorizontal: 10, // Gives content room to breathe
+    paddingHorizontal: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
     shadowRadius: 12,
     elevation: 5,
-    justifyContent: "space-around", // Distribute items evenly
+    justifyContent: "space-around",
     alignItems: "center",
-    
   },
   statBox: {
-    flex: 1, // Let boxes grow equally
+    flex: 1,
     alignItems: "center",
   },
   statNumber: {
-    fontSize: 18, // Adjusted size to avoid clipping on small screens
+    fontSize: 18,
     fontWeight: "bold",
-  
   },
   statLabel: {
     fontSize: 11,
@@ -421,12 +475,11 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 16,
     marginBottom: 10,
-    
   },
   menuItemLeft: {
     flexDirection: "row",
     alignItems: "center",
-    flex: 1, // Let left side fill space
+    flex: 1,
     marginRight: 10,
   },
   menuText: {
@@ -442,7 +495,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 10,
     padding: 16,
-    backgroundColor:"red",
+    backgroundColor:"#dc2626",
     borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
@@ -461,5 +514,22 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 30,
     marginTop: 10,
+  },
+  // ZOOM STYLES
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  zoomedImage: {
+    width: "90%",
+    height: "70%",
   },
 });

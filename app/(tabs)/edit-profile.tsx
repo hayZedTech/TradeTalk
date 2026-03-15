@@ -1,5 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
+import { validateAndProcessMedia } from "../../utils/mediaHelper";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -14,6 +16,8 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Modal,
+  Pressable,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
@@ -22,7 +26,9 @@ export default function EditProfile() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [processingImage, setProcessingImage] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [isImageZoomed, setIsImageZoomed] = useState(false); // New state for zoom
 
   useEffect(() => {
     fetchProfile();
@@ -55,11 +61,18 @@ export default function EditProfile() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.5,
+      quality: 0.8,
     });
 
     if (!result.canceled) {
-      setImage(result.assets[0].uri);
+      setProcessingImage(true);
+      const processedUri = await validateAndProcessMedia(result.assets[0].uri, 'image');
+      if (processedUri) {
+        setImage(processedUri);
+      } else {
+        setImage(result.assets[0].uri);
+      }
+      setProcessingImage(false);
     }
   }
 
@@ -147,8 +160,31 @@ export default function EditProfile() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
+      {/* ZOOM MODAL */}
+      <Modal
+        visible={isImageZoomed}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsImageZoomed(false)}
+      >
+        <Pressable 
+          style={styles.modalOverlay} 
+          onPress={() => setIsImageZoomed(false)}
+        >
+          <View style={styles.modalContent}>
+            {(image || avatarUrl) && (
+              <Image 
+                source={{ uri: image || avatarUrl || "" }} 
+                style={styles.zoomedImage} 
+                resizeMode="contain" 
+              />
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.replace("/profile")} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.navigate("/profile")} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Profile</Text>
@@ -157,18 +193,30 @@ export default function EditProfile() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.avatarSection}>
-          <View style={styles.avatar}>
-            {image || avatarUrl ? (
-              <Image
-                source={{ uri: image || avatarUrl || "" }}
-                style={styles.avatarImage}
-              />
-            ) : (
-              <Text style={styles.avatarText}>
-                {username ? username.charAt(0).toUpperCase() : "U"}
-              </Text>
-            )}
-          </View>
+          <TouchableOpacity 
+            activeOpacity={0.8} 
+            onPress={() => {
+              if (image || avatarUrl) setIsImageZoomed(true);
+            }}
+          >
+            <View style={styles.avatar}>
+              {image || avatarUrl ? (
+                <Image
+                  source={{ uri: image || avatarUrl || "" }}
+                  style={styles.avatarImage}
+                />
+              ) : (
+                <Text style={styles.avatarText}>
+                  {username ? username.charAt(0).toUpperCase() : "U"}
+                </Text>
+              )}
+              {processingImage && (
+                <View style={styles.processingOverlay}>
+                  <ActivityIndicator color="#fff" />
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
           <TouchableOpacity onPress={pickImage} activeOpacity={0.7}>
             <Text style={styles.changePhotoText}>Change Profile Photo</Text>
           </TouchableOpacity>
@@ -193,7 +241,7 @@ export default function EditProfile() {
             />
           </View>
           <Text style={styles.helperText}>
-            This is your public display name.
+            This is your public display name. 
           </Text>
         </View>
 
@@ -238,7 +286,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 12,
-    overflow: "hidden", // Ensures image stays circular
+    overflow: "hidden", 
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
   },
   avatarImage: {
     width: 100,
@@ -271,4 +325,21 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.7 },
   saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  // ZOOM STYLES
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  zoomedImage: {
+    width: "90%",
+    height: "70%",
+  },
 });

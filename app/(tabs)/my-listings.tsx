@@ -33,9 +33,10 @@ export default function MyListings() {
       } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Fix: Removed the join "owner:users(username)" which was causing the relationship error
       const { data, error } = await supabase
         .from("products")
-        .select("*, owner:users(username)")
+        .select("*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
