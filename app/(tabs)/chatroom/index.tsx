@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'; // Added useCallback
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,11 +9,15 @@ import {
   StyleSheet,
   TextInput,
   Modal,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native'; // Added useFocusEffect
+import { useFocusEffect } from '@react-navigation/native';
 import { chatService } from '../../../services/chatService';
-import { User } from '../../../lib/supabase';
+import { User, supabase } from '../../../lib/supabase';
+
+// Grandfathering cutoff — all users created before this feature launched
+const GRANDFATHER_CUTOFF = '2025-07-24T00:00:00.000Z';
 
 export default function ChatroomScreen() {
   const router = useRouter();
@@ -24,6 +28,7 @@ export default function ChatroomScreen() {
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [imageZoomVisible, setImageZoomVisible] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState<{[userId: string]: number}>({});
 
   // ✅ Updated Date Formatter (Today / Yesterday / Date)
   const formatTime = (dateString?: string) => {
@@ -72,7 +77,40 @@ export default function ChatroomScreen() {
 
   const loadUsers = async () => {
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
       const data = await chatService.getAllUsersExceptMe();
+      
+      // Load unread counts for each user's direct chat
+      const unreadData: {[userId: string]: number} = {};
+      await Promise.all(
+        data.map(async (otherUser) => {
+          // Find direct chat between current user and this user
+          const { data: chat } = await supabase
+            .from('chats')
+            .select('id')
+            .eq('type', 'direct')
+            .or(
+              `and(buyer_id.eq.${user.id},seller_id.eq.${otherUser.id}),and(buyer_id.eq.${otherUser.id},seller_id.eq.${user.id})`
+            )
+            .maybeSingle();
+
+          if (chat) {
+            const { count } = await supabase
+              .from('messages')
+              .select('*', { count: 'exact', head: true })
+              .eq('chat_id', chat.id)
+              .neq('sender_id', user.id)
+              .eq('is_read', false);
+            unreadData[otherUser.id] = count || 0;
+          } else {
+            unreadData[otherUser.id] = 0;
+          }
+        })
+      );
+      
+      setUnreadCounts(unreadData);
       setUsers(data);
       setFilteredUsers(data);
     } catch (err) {
@@ -82,15 +120,76 @@ export default function ChatroomScreen() {
     }
   };
 
-  const startChat = async (user: User) => {
+  const startChat = async (otherUser: any) => {
     try {
-      const chat = await chatService.getOrCreateDirectChat(user.id);
-      
-      // Updated to pass the 'personal' source
-      router.push({
-        pathname: `/chat/${chat.id}`,
-        params: { source: 'personal' } 
-      });
+      const { data: { user: me } } = await supabase.auth.getUser();
+      if (!me) return;
+
+      // 1. Grandfathered: both users existed before cutoff → chat freely
+      const myCreatedAt = new Date((await supabase.from('users').select('created_at').eq('id', me.id).single()).data?.created_at);
+      const theirCreatedAt = new Date(otherUser.created_at);
+      const cutoff = new Date(GRANDFATHER_CUTOFF);
+
+      if (myCreatedAt < cutoff && theirCreatedAt < cutoff) {
+        const chat = await chatService.getOrCreateDirectChat(otherUser.id);
+        router.push({ pathname: `/chat/${chat.id}`, params: { source: 'personal' } });
+        return;
+      }
+
+      // 2. Check existing friend request
+      const { data: existing } = await supabase
+        .from('friend_requests')
+        .select('id, status, updated_at')
+        .or(`and(sender_id.eq.${me.id},receiver_id.eq.${otherUser.id}),and(sender_id.eq.${otherUser.id},receiver_id.eq.${me.id})`)
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.status === 'accepted') {
+          const chat = await chatService.getOrCreateDirectChat(otherUser.id);
+          router.push({ pathname: `/chat/${chat.id}`, params: { source: 'personal' } });
+          return;
+        }
+        if (existing.status === 'pending') {
+          Alert.alert('Request Pending', 'Your friend request is still pending.');
+          return;
+        }
+        if (existing.status === 'declined') {
+          const declinedAt = new Date(existing.updated_at);
+          const monthAgo = new Date();
+          monthAgo.setMonth(monthAgo.getMonth() - 1);
+          if (declinedAt > monthAgo) {
+            Alert.alert('Request Declined', 'You can resend a friend request after 30 days.');
+            return;
+          }
+          // 30 days passed — delete old declined request and allow resend
+          await supabase.from('friend_requests').delete().eq('id', existing.id);
+        }
+      }
+
+      // 4. Send friend request
+      Alert.alert(
+        'Send Friend Request',
+        `Send ${otherUser.username} a friend request to start chatting?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Send Request',
+            onPress: async () => {
+              const { error } = await supabase.from('friend_requests').insert({
+                sender_id: me.id,
+                receiver_id: otherUser.id,
+                status: 'pending',
+              });
+              if (error) {
+                Alert.alert('Error', 'Failed to send friend request');
+              } else {
+                Alert.alert('Request Sent', `Friend request sent to ${otherUser.username}`);
+                loadUsers();
+              }
+            },
+          },
+        ]
+      );
     } catch (err) {
       console.error('Failed to start chat', err);
     }
@@ -172,17 +271,31 @@ export default function ChatroomScreen() {
                 <Text style={styles.username} numberOfLines={1}>
                   {item.username}
                 </Text>
-                {item.last_message && (
-                  <Text style={styles.timeText}>
-                    {formatTime(item.last_message.created_at)}
-                  </Text>
-                )}
+                <View style={styles.rightSection}>
+                  {unreadCounts[item.id] > 0 && (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadText}>
+                        {unreadCounts[item.id] > 99 ? '99+' : unreadCounts[item.id]}
+                      </Text>
+                    </View>
+                  )}
+                  {item.last_message && (
+                    <Text style={styles.timeText}>
+                      {formatTime(item.last_message.created_at)}
+                    </Text>
+                  )}
+                </View>
               </View>
 
               <Text style={styles.subtext} numberOfLines={1}>
-                {item.last_message
-                  ? item.last_message.content
-                  : 'Tap to start chatting'}
+                {(item as any)?.is_online 
+                  ? 'Online' 
+                  : item.last_seen 
+                    ? `Last seen ${formatTime(item.last_seen)}` 
+                    : item.last_message
+                      ? item.last_message.content
+                      : 'Tap to start chatting'
+                }
               </Text>
             </View>
           </TouchableOpacity>
@@ -378,6 +491,11 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 8,
   },
+  rightSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   timeText: {
     fontSize: 11,
     color: '#000',
@@ -510,5 +628,19 @@ const styles = StyleSheet.create({
     width: '90%',
     height: '70%',
     borderRadius: 10,
+  },
+  unreadBadge: {
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  unreadText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });

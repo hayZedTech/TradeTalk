@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { memo } from "react";
+import React, { memo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -9,11 +11,16 @@ import {
   View,
 } from "react-native";
 import { Message } from "../../../lib/supabase";
+import { useTheme } from "../../../contexts/ThemeContext";
 
-const EMOJIS = [
-  "👍", "❤️", "😂", "🤣", "🥰", "🤫", "😮", "😢",
-  "🙏", "🔥", "👏", "🎉", "💯", "🤔", "👀", "🏃‍♂️",
+const EMOJI_TABS = [
+  { label: "😀", title: "Smileys", emojis: ["😀","😂","🥰","😎","😢","😡","🤔","😮","🤣","😅","😇","🥳","😏","😬","🤯","😴","🥺","😤","🤗","😑","😜","🤪","😒","😳","🫠","🤭","😶","🫡","😈","🤫","🫢","😲"] },
+  { label: "👍", title: "Gestures", emojis: ["👍","👎","👏","🙏","🤝","✌️","🤞","👀","💪","🤙","👋","🫶","🤲","🫱","🫳","☝️","👆","👇","👈","👉","🤘","🤟","🖖","✋","🖐️","👌","🤌","🤏","🫰","💅","🫵","🙌"] },
+  { label: "❤️", title: "Hearts", emojis: ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","💔","❤️🔥","💕","💞","💓","💗","💖","💝","💘","💟","♥️","❣️","🫀","💌","💋","😍","🥰","😘","💑","👫","💏","🌹","💐","🫦"] },
+  { label: "🎉", title: "Celebration", emojis: ["🎉","🔥","💯","🎊","🏆","⚡","🌟","💥","🎯","🚀","👑","💎","🏅","🥇","🎖️","🎀","🎁","🪄","✨","🌈","🎆","🎇","🧨","🪅","🎠","🎡","🎢","🎪","🎭","🎬","🎤","🎸"] },
 ];
+
+const QUICK_EMOJIS = EMOJI_TABS[0].emojis.slice(0, 15);
 
 interface ChatInputBarProps {
   inputRef: React.RefObject<TextInput>;
@@ -50,6 +57,10 @@ const ChatInputBar = ({
   onToggleEmojiPicker,
   onCancelReplyEdit,
 }: ChatInputBarProps) => {
+  const { colors } = useTheme();
+  const [showAllEmojis, setShowAllEmojis] = useState(false);
+  const [activeTab, setActiveTab] = useState(0);
+
   return (
     <>
       {(editingMessage || replyingTo || referencingTo) && (
@@ -75,8 +86,8 @@ const ChatInputBar = ({
       )}
 
       {showEmojiPicker && (
-        <View style={styles.emojiPickerContainer}>
-          {EMOJIS.map((emoji) => (
+        <View style={[styles.emojiPickerContainer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
+          {QUICK_EMOJIS.map((emoji) => (
             <TouchableOpacity
               key={emoji}
               onPress={() => onTyping(newMessage + emoji)}
@@ -85,8 +96,44 @@ const ChatInputBar = ({
               <Text style={styles.emojiPickerText}>{emoji}</Text>
             </TouchableOpacity>
           ))}
+          <TouchableOpacity
+            onPress={() => setShowAllEmojis(true)}
+            style={styles.emojiPickerButton}
+          >
+            <Ionicons name="ellipsis-horizontal" size={24} color={colors.text} />
+          </TouchableOpacity>
         </View>
       )}
+
+      <Modal transparent animationType="fade" visible={showAllEmojis} onRequestClose={() => setShowAllEmojis(false)}>
+        <Pressable style={styles.emojiModalOverlay} onPress={() => setShowAllEmojis(false)}>
+          <View style={[styles.emojiModalBox, { backgroundColor: colors.background }]}>
+            <View style={[styles.emojiTabBar, { borderBottomColor: colors.border }]}>
+              {EMOJI_TABS.map((tab, i) => (
+                <TouchableOpacity
+                  key={i}
+                  onPress={() => setActiveTab(i)}
+                  style={[styles.emojiTab, activeTab === i && { borderBottomWidth: 2, borderBottomColor: colors.primary }]}
+                >
+                  <Text style={styles.emojiTabLabel}>{tab.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.emojiModalGrid}>
+              {EMOJI_TABS[activeTab].emojis.map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  activeOpacity={0.6}
+                  onPress={() => { onTyping(newMessage + emoji); setShowAllEmojis(false); setActiveTab(0); }}
+                  style={styles.emojiModalButton}
+                >
+                  <Text style={styles.emojiModalEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
 
       <View style={styles.inputBar}>
         <TouchableOpacity onPress={onPickMedia} style={styles.attachBtn}>
@@ -161,10 +208,8 @@ const styles = StyleSheet.create({
   emojiPickerContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    backgroundColor: "#fff",
     padding: 10,
     borderTopWidth: 1,
-    borderTopColor: "#f3f4f6",
     justifyContent: "space-around",
   },
   emojiPickerButton: {
@@ -172,6 +217,44 @@ const styles = StyleSheet.create({
   },
   emojiPickerText: {
     fontSize: 24,
+  },
+  emojiModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emojiModalBox: {
+    width: 300,
+    borderRadius: 20,
+    padding: 16,
+  },
+  emojiTabBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginBottom: 12,
+    borderBottomWidth: 1,
+  },
+  emojiTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  emojiTabLabel: {
+    fontSize: 22,
+  },
+  emojiModalGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+  emojiModalButton: {
+    width: "20%",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  emojiModalEmoji: {
+    fontSize: 26,
   },
   inputBar: {
     flexDirection: "row",

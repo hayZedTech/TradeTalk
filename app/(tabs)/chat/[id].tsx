@@ -2,10 +2,11 @@ import {
   RealtimeChannel,
   RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
-import { Audio, AVPlaybackStatus } from "expo-av";
+import { useAudioRecorder, useAudioRecorderState, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from "@expo/vector-icons";
 import React, {
   memo,
@@ -44,6 +45,7 @@ import ImageZoomModal from "./ImageZoomModal";
 import MessageItem from "./MessageItem";
 import PreparingFileOverlay from "./PreparingFileOverlay";
 import ChatOptionsModal from "../../../components/chat/ChatOptionsModal";
+import { AudioMessageBubble } from "../../../components/chat/AudioMessageBubble";
 import { useTheme } from "../../../contexts/ThemeContext";
 
 // ✅ Fix for inverted list stacking:
@@ -83,47 +85,69 @@ export default function ChatRoom() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [swipeHighlightedId, setSwipeHighlightedId] = useState<string | null>(null);
 
-  // Multiple selection state
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
-  const [isTogglingSelection, setIsTogglingSelection] = useState(false);
+  // Consolidated UI state
+  const [uiState, setUiState] = useState({
+    isSelectionMode: false,
+    selectedMessages: new Set<string>(),
+    isTogglingSelection: false,
+    isBlockedByThem: false,
+    optionsModalVisible: false,
+    isUserBlocked: false,
+    searchResults: [] as any[],
+    isSearching: false,
+    searchQuery: '',
+    isPreparingFile: false,
+    selectedImage: null as string | null,
+    isRecording: false,
+    audioReady: false,
+  });
 
-  // Add state to track if current user is blocked by the other user
-  const [isBlockedByThem, setIsBlockedByThem] = useState(false);
-  // Chat Options Modal State
-  const [optionsModalVisible, setOptionsModalVisible] = useState(false);
-  const [isUserBlocked, setIsUserBlocked] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  // Presence State (separate for performance)
+  const [presenceState, setPresenceState] = useState({
+    isPeerOnline: false,
+    isPeerTyping: false,
+    peerLastSeen: null as string | null,
+  });
 
   // Theme
   const { colors } = useTheme();
 
-  // New: chat-level preparing indicator (shows immediately after capture/selection/recording)
-  const [isPreparingFile, setIsPreparingFile] = useState(false);
+  const [recordingUri, setRecordingUri] = useState<string | null>(null);
+  const [setIsPeerOnline] = useState(() => (value: boolean) => setPresenceState(prev => ({ ...prev, isPeerOnline: value })));
+  const [setIsPeerTyping] = useState(() => (value: boolean) => setPresenceState(prev => ({ ...prev, isPeerTyping: value })));
+  const [setPeerLastSeen] = useState(() => (value: string | null) => setPresenceState(prev => ({ ...prev, peerLastSeen: value })));
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
 
-  // Presence State
-  const [isPeerOnline, setIsPeerOnline] = useState(false);
-  const [isPeerTyping, setIsPeerTyping] = useState(false);
-  const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null);
+  // Setup audio recording permissions and mode (optimized)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const permission = await AudioModule.requestRecordingPermissionsAsync();
 
-  // Zoom State
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+        if (!permission.granted || !mounted) {
+          if (mounted) Alert.alert("Microphone permission is required.");
+          return;
+        }
 
-  // Media and Hardware States
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: true,
+        });
 
-  // Playback States
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const [playbackStatus, setPlaybackStatus] = useState({
-    position: 0,
-    duration: 0,
-    isPlaying: false,
-  });
+        if (mounted) {
+          setUiState(prev => ({ ...prev, audioReady: true }));
+        }
+      } catch (error) {
+        console.log(error);
+        if (mounted) Alert.alert("Audio setup failed");
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+
 
   // Upload progress state: map message id -> percent (0..100)
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>(
@@ -142,29 +166,15 @@ export default function ChatRoom() {
   const presenceChannelRef = useRef<RealtimeChannel | null>(null);
   const reactionsChannelRef = useRef<RealtimeChannel | null>(null);
 
-  // Refs for stable audio callbacks
-  const soundRef = useRef<Audio.Sound | null>(null);
-  const playbackStatusRef = useRef(playbackStatus);
-  const playingIdRef = useRef(playingId);
-
   useEffect(() => {
-    return sound
-      ? () => {
-          sound.unloadAsync();
+    return () => {
+      Object.values(videoRefs.current).forEach(video => {
+        if (video && video.pauseAsync) {
+          video.pauseAsync().catch(() => {});
         }
-      : undefined;
-  }, [sound]);
-
-  // Keep refs synced with state
-  useEffect(() => {
-    soundRef.current = sound;
-  }, [sound]);
-  useEffect(() => {
-    playbackStatusRef.current = playbackStatus;
-  }, [playbackStatus]);
-  useEffect(() => {
-    playingIdRef.current = playingId;
-  }, [playingId]);
+      });
+    };
+  }, []);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -174,7 +184,15 @@ export default function ChatRoom() {
     checkBlockStatus();
   }, [chatDetails]);
 
-  const checkBlockStatus = async () => {
+  // Refresh block status when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      checkBlockStatus();
+    }, [chatDetails, currentUserId])
+  );
+
+  // Optimized block status check
+  const checkBlockStatus = useCallback(async () => {
     if (!currentUserId || !chatDetails) return;
     
     const otherUserId = chatDetails.buyer_id === currentUserId 
@@ -182,28 +200,30 @@ export default function ChatRoom() {
       : chatDetails.buyer_id;
 
     try {
-      // Check if current user blocked the other user
-      const { data: blockedByMe } = await supabase
-        .from('blocked_users')
-        .select('id')
-        .eq('blocker_id', currentUserId)
-        .eq('blocked_id', otherUserId)
-        .single();
+      const [blockedByMe, blockedByThem] = await Promise.all([
+        supabase
+          .from('blocked_users')
+          .select('id')
+          .eq('blocker_id', currentUserId)
+          .eq('blocked_id', otherUserId)
+          .single(),
+        supabase
+          .from('blocked_users')
+          .select('id')
+          .eq('blocker_id', otherUserId)
+          .eq('blocked_id', currentUserId)
+          .single()
+      ]);
       
-      // Check if other user blocked current user
-      const { data: blockedByThem } = await supabase
-        .from('blocked_users')
-        .select('id')
-        .eq('blocker_id', otherUserId)
-        .eq('blocked_id', currentUserId)
-        .single();
-      
-      setIsUserBlocked(!!blockedByMe);
-      setIsBlockedByThem(!!blockedByThem);
+      setUiState(prev => ({
+        ...prev,
+        isUserBlocked: !!blockedByMe.data,
+        isBlockedByThem: !!blockedByThem.data
+      }));
     } catch (error) {
-      setIsUserBlocked(false);
+      setUiState(prev => ({ ...prev, isUserBlocked: false, isBlockedByThem: false }));
     }
-  };
+  }, [currentUserId, chatDetails]);
 
   // Memoize messages map for fast lookups
   const messageMap = useMemo(() => {
@@ -318,77 +338,7 @@ export default function ChatRoom() {
     }
   };
 
-  const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-    if (status.isLoaded) {
-      setLoadingAudioId(null); // Clear loading indicator once loaded
-      setPlaybackStatus({
-        position: status.positionMillis,
-        duration: status.durationMillis || 0,
-        isPlaying: status.isPlaying,
-      });
 
-      if (status.didJustFinish) {
-        setPlayingId(null);
-        setPlaybackStatus({ position: 0, duration: 0, isPlaying: false });
-      }
-    }
-  };
-
-  const playSound = useCallback(
-    async (messageId: string, uri: string) => {
-      setLoadingAudioId(messageId);
-      try {
-        const currentSound = soundRef.current;
-        const currentPlayingId = playingIdRef.current;
-        const currentStatus = playbackStatusRef.current;
-
-        if (currentPlayingId === messageId && currentSound) {
-          if (currentStatus.isPlaying) {
-            await currentSound.pauseAsync();
-            setLoadingAudioId(null); // Clear loading indicator on pause
-          } else {
-            await currentSound.playAsync();
-            setLoadingAudioId(null); // Clear loading indicator on play
-          }
-          return;
-        }
-        if (currentSound) await currentSound.unloadAsync();
-
-        setPlayingId(messageId);
-        const { sound: newSound } = await Audio.Sound.createAsync(
-          { uri },
-          { shouldPlay: true },
-          onPlaybackStatusUpdate,
-        );
-        setSound(newSound);
-      } catch (error) {
-        Alert.alert("Error", "Could not play audio");
-        setLoadingAudioId(null);
-        setPlayingId(null);
-      } // Add soundRef, playingIdRef, playbackStatusRef to dependencies
-    },
-    [soundRef, playingIdRef, playbackStatusRef],
-  );
-
-  const audioSkip = useCallback(async (deltaSeconds: number) => {
-    try {
-      const currentSound = soundRef.current;
-      if (!currentSound) return;
-      const status: any = await currentSound.getStatusAsync();
-      if (!status.isLoaded) return;
-      const newPos = Math.max(
-        0,
-        Math.min(
-          status.durationMillis || 0,
-          (status.positionMillis || 0) + deltaSeconds * 1000,
-        ),
-      );
-      await currentSound.setPositionAsync(newPos);
-      setPlaybackStatus((prev) => ({ ...prev, position: newPos }));
-    } catch (e) {
-      // ignore
-    }
-  }, []); // Stable callback
 
   // start a simulated progress for a temp id
   const startSimulatedProgress = (tempId: string) => {
@@ -423,16 +373,15 @@ export default function ChatRoom() {
     }, 1200);
   };
 
-  const handleVideoStatus = (status: any, id: string) => {
+  const handleVideoStatus = useCallback((status: any, id: string) => {
     if (status.didJustFinish) {
       setPlayingVideoId(null);
-
       const video = videoRefs.current[id];
       if (video) {
-        video.setPositionAsync(0); // rewind to start
+        video.setPositionAsync(0);
       }
     }
-  };
+  }, []);
 
   const handlePickerResult = async (result: ImagePicker.ImagePickerResult) => {
     if (!result.canceled) {
@@ -440,10 +389,20 @@ export default function ChatRoom() {
       const type = asset.type === "video" ? "video" : "image";
 
       // show chat-level preparing indicator immediately
-      setIsPreparingFile(true);
+      setUiState(prev => ({ ...prev, isPreparingFile: true }));
 
       setSending(true);
+      
+      // Add minimum processing time for better UX
+      const startTime = Date.now();
       const processedUri = await validateAndProcessMedia(asset.uri, type);
+      const processingTime = Date.now() - startTime;
+      
+      // Ensure at least 1 second of processing time for user feedback
+      if (processingTime < 1000) {
+        await new Promise(resolve => setTimeout(resolve, 1000 - processingTime));
+      }
+      
       setSending(false);
 
       if (processedUri) {
@@ -453,11 +412,11 @@ export default function ChatRoom() {
           handleMediaSend(processedUri, type);
         } else {
           // file invalid -> hide preparing
-          setIsPreparingFile(false);
+          setUiState(prev => ({ ...prev, isPreparingFile: false }));
         }
       } else {
         // processing failed -> hide preparing
-        setIsPreparingFile(false);
+        setUiState(prev => ({ ...prev, isPreparingFile: false }));
       }
     }
   };
@@ -542,7 +501,7 @@ export default function ChatRoom() {
               }
 
               // show chat-level preparing indicator immediately
-              setIsPreparingFile(true);
+              setUiState(prev => ({ ...prev, isPreparingFile: true }));
 
               setSending(true);
               const processedUri = await validateAndProcessMedia(uri, "audio");
@@ -553,10 +512,10 @@ export default function ChatRoom() {
                 if (info.exists && checkFileSize(info.size, "audio")) {
                   handleMediaSend(processedUri, "audio", name);
                 } else {
-                  setIsPreparingFile(false);
+                  setUiState(prev => ({ ...prev, isPreparingFile: false }));
                 }
               } else {
-                setIsPreparingFile(false);
+                setUiState(prev => ({ ...prev, isPreparingFile: false }));
               }
             }
           },
@@ -566,69 +525,53 @@ export default function ChatRoom() {
     );
   };
 
-  const startRecording = async () => {
-    try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-      setRecording(recording);
-      setIsRecording(true);
-    } catch (err) {
-      Alert.alert("Error", "Could not start recording");
+  const startRecording = useCallback(async () => {
+    if (!uiState.audioReady) {
+      Alert.alert('Audio not ready', 'Please wait for audio setup to complete.');
+      return;
     }
-  };
 
-  const stopRecording = async () => {
-    if (!recording) return;
-    setIsRecording(false);
     try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      if (!uri) {
-        // handle missing URI gracefully
-        Alert.alert("Recording failed", "No audio file was created");
-        setRecording(null);
-        return;
-      }
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setUiState(prev => ({ ...prev, isRecording: true }));
+    } catch (error) {
+      console.log(error);
+      Alert.alert("Could not start recording");
+    }
+  }, [uiState.audioReady, recorder]);
 
-      // show chat-level preparing indicator immediately
-      setIsPreparingFile(true);
-
-      setSending(true);
-      const processedUri = await validateAndProcessMedia(uri, "audio");
-      setSending(false);
-
-      if (processedUri) {
-        const info = await FS.getInfoAsync(processedUri);
-        if (!info.exists) {
-          Alert.alert(
-            "Recording error",
-            "Audio file not found after processing",
-          );
-          setRecording(null);
-          setIsPreparingFile(false);
-          return;
-        }
-        if (checkFileSize(info.size, "audio")) {
-          handleMediaSend(processedUri, "audio", "Voice Note");
+  const stopRecording = useCallback(async () => {
+    try {
+      await recorder.stop();
+      setUiState(prev => ({ ...prev, isRecording: false }));
+      
+      const uri = recorder.uri;
+      if (uri) {
+        setRecordingUri(uri);
+        console.log("Saved file URI:", uri);
+        
+        // Check if file exists and send it
+        const info = await FS.getInfoAsync(uri);
+        if (info.exists && info.size > 0) {
+          if (checkFileSize(info.size, 'audio')) {
+            setUiState(prev => ({ ...prev, isPreparingFile: true }));
+            handleMediaSend(uri, 'audio', 'Voice message');
+          } else {
+            setUiState(prev => ({ ...prev, isPreparingFile: false }));
+          }
         } else {
-          setIsPreparingFile(false);
+          Alert.alert('Recording Error', 'Recording file is empty or not found.');
         }
       } else {
-        setIsPreparingFile(false);
+        Alert.alert('Recording Error', 'No recording file was created.');
       }
-      setRecording(null);
-    } catch (err) {
-      console.error(err);
-      setRecording(null);
-      setIsPreparingFile(false);
+    } catch (error) {
+      console.log(error);
+      Alert.alert("Could not stop recording");
+      setUiState(prev => ({ ...prev, isRecording: false }));
     }
-  };
+  }, [recorder]);
 
   const handleMediaSend = async (
     uri: string,
@@ -637,19 +580,19 @@ export default function ChatRoom() {
   ) => {
     if (!uri) {
       Alert.alert("Upload Error", "Missing file URI");
-      setIsPreparingFile(false);
+      setUiState(prev => ({ ...prev, isPreparingFile: false }));
       return;
     }
 
     // Check if blocked before sending media
-    if (isBlockedByThem) {
+    if (uiState.isBlockedByThem) {
       Alert.alert('Cannot Send Media', 'You have been blocked by this user.');
-      setIsPreparingFile(false);
+      setUiState(prev => ({ ...prev, isPreparingFile: false }));
       return;
     }
 
     // hide chat-level preparing indicator because actual upload (simulated progress) starts now
-    setIsPreparingFile(false);
+    setUiState(prev => ({ ...prev, isPreparingFile: false }));
 
     setSending(true);
 
@@ -859,7 +802,7 @@ export default function ChatRoom() {
         },
         async (payload) => {
           setMessages((prev) =>
-            prev.map((m) => (m.id === payload.new.id ? payload.new : m)),
+            prev.map((m) => (m.id === payload.new.id ? { ...payload.new, reactions: m.reactions } : m)),
           );
         },
       )
@@ -892,46 +835,44 @@ export default function ChatRoom() {
         ? chatDetails.seller_id
         : chatDetails.buyer_id;
 
-    // 1. Fetch initial Last Seen from the database
-    const fetchInitialLastSeen = async () => {
+    // 1. Fetch initial online status and Last Seen from the database
+    const fetchInitialStatus = async () => {
       const { data } = await supabase
         .from("users")
-        .select("last_seen")
+        .select("last_seen, is_online")
         .eq("id", peerId)
         .single();
-      if (data?.last_seen) setPeerLastSeen(data.last_seen);
+      if (data) {
+        setPresenceState(prev => ({ ...prev, isPeerOnline: data.is_online || false }));
+        if (data.last_seen) setPresenceState(prev => ({ ...prev, peerLastSeen: data.last_seen }));
+      }
     };
-    fetchInitialLastSeen();
+    fetchInitialStatus();
 
-    // 2. Set up Presence for real-time updates
-    const presenceChannel = supabase.channel(`presence_${chatId}`);
+    // 2. Set up Presence for typing indicators only
+    const presenceChannel = supabase.channel(`presence_${chatId}`, {
+      config: {
+        presence: {
+          key: currentUserId,
+        },
+      },
+    });
     presenceChannelRef.current = presenceChannel;
 
     presenceChannel
       .on("presence", { event: "sync" }, () => {
         const state = presenceChannel.presenceState();
+        
         const peerSessions = state[peerId as string] as any[];
 
-        if (peerSessions && peerSessions.length > 0) {
-          setIsPeerOnline(true);
-          setIsPeerTyping(peerSessions.some((p) => p.typing === true));
-
-          // Update local lastSeen with the most recent session timestamp
-          const latestSeen = peerSessions.reduce(
-            (max, p) => (p.online_at > max ? p.online_at : max),
-            peerSessions[0].online_at,
-          );
-          setPeerLastSeen(latestSeen);
-        } else {
-          setIsPeerOnline(false);
-          setIsPeerTyping(false);
-        }
+        // Only update typing status, not online status
+        const isTyping = peerSessions && peerSessions.length > 0 && peerSessions.some((p) => p.typing === true);
+        setPresenceState(prev => ({ ...prev, isPeerTyping: isTyping }));
       })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
           try {
             await presenceChannel.track({
-              online_at: new Date().toISOString(),
               typing: false,
             });
           } catch (e) {
@@ -951,18 +892,28 @@ export default function ChatRoom() {
   const formatLastSeen = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
-    const diffInHours = Math.abs(now.getTime() - date.getTime()) / 36e5;
-
-    if (diffInHours < 24 && date.getDate() === now.getDate()) {
-      // Added hour12: true to force 12-hour format with AM/PM
+    
+    // Get start of today and yesterday for accurate date comparison
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    
+    const messageDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    
+    // If it's today, show time
+    if (messageDate.getTime() === today.getTime()) {
       return `at ${date.toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
       })}`;
-    } else if (diffInHours < 48 && date.getDate() === now.getDate() - 1) {
+    }
+    // If it's yesterday, show "Yesterday"
+    else if (messageDate.getTime() === yesterday.getTime()) {
       return "Yesterday";
-    } else {
+    }
+    // Otherwise show the date
+    else {
       return date.toLocaleDateString();
     }
   };
@@ -1062,21 +1013,27 @@ export default function ChatRoom() {
     };
   }, [chatId]);
 
+  // Optimized typing handler
   const handleTyping = useCallback((text: string) => {
     setNewMessage(text);
     if (!presenceChannelRef.current) return;
-    presenceChannelRef.current.track({
-      online_at: new Date().toISOString(),
-      typing: true,
-    });
+    
+    const isTyping = text.trim().length > 0;
+    
+    // Debounce presence updates
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    presenceChannelRef.current.track({ typing: isTyping });
 
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      presenceChannelRef.current?.track({
-        online_at: new Date().toISOString(),
-        typing: false,
-      });
-    }, 2000);
+    if (isTyping) {
+      typingTimeoutRef.current = setTimeout(() => {
+        if (presenceChannelRef.current) {
+          presenceChannelRef.current.track({ typing: false });
+        }
+      }, 2000);
+    }
   }, []);
 
   const onRefresh = useCallback(() => {
@@ -1283,76 +1240,66 @@ export default function ChatRoom() {
 
   // Multiple selection functions
   const startSelectionMode = useCallback(async () => {
-    setIsSelectionMode(true);
-    setSelectedMessages(new Set());
-    setOptionsModalVisible(false);
+    setUiState(prev => ({ ...prev, isSelectionMode: true, selectedMessages: new Set(), optionsModalVisible: false }));
   }, []);
 
   const exitSelectionMode = useCallback(() => {
-    setIsSelectionMode(false);
-    setSelectedMessages(new Set());
-    setIsTogglingSelection(false); // Clear any ongoing toggle state
+    setUiState(prev => ({ ...prev, isSelectionMode: false, selectedMessages: new Set(), isTogglingSelection: false }));
   }, []);
 
   const toggleMessageSelection = useCallback((messageId: string) => {
-    // Handle special case for starting selection mode
     if (messageId.startsWith('START_SELECTION:')) {
       const actualId = messageId.replace('START_SELECTION:', '');
-      setIsSelectionMode(true);
-      setSelectedMessages(new Set([actualId]));
+      setUiState(prev => ({ ...prev, isSelectionMode: true, selectedMessages: new Set([actualId]) }));
       return;
     }
     
-    // Normal selection toggle
-    if (!isSelectionMode) return;
+    if (!uiState.isSelectionMode) return;
     
-    setSelectedMessages(prev => {
-      const newSet = new Set(prev);
+    setUiState(prev => {
+      const newSet = new Set(prev.selectedMessages);
       if (newSet.has(messageId)) {
         newSet.delete(messageId);
       } else {
         newSet.add(messageId);
       }
-      return newSet;
+      return { ...prev, selectedMessages: newSet };
     });
-  }, [isSelectionMode]);
+  }, [uiState.isSelectionMode]);
 
   const selectAllMessages = useCallback(() => {
     const allMessageIds = messages.map(msg => msg.id);
     
-    setIsTogglingSelection(true);
+    setUiState(prev => ({ ...prev, isTogglingSelection: true }));
     
-    // Use requestAnimationFrame to ensure the spinner shows
     requestAnimationFrame(() => {
-      if (selectedMessages.size === messages.length) {
-        // If all are selected, unselect all
-        setSelectedMessages(new Set());
-      } else {
-        // If not all are selected, select all
-        setSelectedMessages(new Set(allMessageIds));
-      }
+      setUiState(prev => {
+        const newSelectedMessages = prev.selectedMessages.size === messages.length 
+          ? new Set<string>() 
+          : new Set(allMessageIds);
+        return { ...prev, selectedMessages: newSelectedMessages };
+      });
       
-      setTimeout(() => setIsTogglingSelection(false), 300);
+      setTimeout(() => setUiState(prev => ({ ...prev, isTogglingSelection: false })), 300);
     });
-  }, [messages, selectedMessages]);
+  }, [messages]);
 
   const deleteSelectedMessages = useCallback(() => {
-    if (selectedMessages.size === 0) return;
+    if (uiState.selectedMessages.size === 0) return;
     
     Alert.alert(
       "Delete Messages", 
-      `Delete ${selectedMessages.size} message${selectedMessages.size > 1 ? 's' : ''}?`,
+      `Delete ${uiState.selectedMessages.size} message${uiState.selectedMessages.size > 1 ? 's' : ''}?`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete for Everyone",
           style: "destructive",
           onPress: async () => {
-            const messagesToDelete = Array.from(selectedMessages);
+            const messagesToDelete = Array.from(uiState.selectedMessages);
             
-            // Mark messages as deleted for everyone in UI
             setMessages(prev => prev.map(msg => 
-              selectedMessages.has(msg.id) 
+              uiState.selectedMessages.has(msg.id) 
                 ? { ...msg, content: 'Message deleted', deleted_for_everyone: true, deleted_at: new Date().toISOString() }
                 : msg
             ));
@@ -1360,7 +1307,6 @@ export default function ChatRoom() {
             exitSelectionMode();
             
             try {
-              // Update database to mark as deleted for everyone
               for (const messageId of messagesToDelete) {
                 await supabase
                   .from('messages')
@@ -1373,22 +1319,20 @@ export default function ChatRoom() {
               }
             } catch (err) {
               console.error('Error deleting messages:', err);
-              fetchData(false); // Refresh on error
+              fetchData(false);
             }
           },
         },
         {
           text: "Delete for Me",
           onPress: async () => {
-            const messagesToDelete = Array.from(selectedMessages);
+            const messagesToDelete = Array.from(uiState.selectedMessages);
             
-            // Hide messages for current user only
-            setMessages(prev => prev.filter(msg => !selectedMessages.has(msg.id)));
+            setMessages(prev => prev.filter(msg => !uiState.selectedMessages.has(msg.id)));
             
             exitSelectionMode();
             
             try {
-              // Update database to mark as deleted for current user
               for (const messageId of messagesToDelete) {
                 await supabase
                   .from('messages')
@@ -1401,13 +1345,13 @@ export default function ChatRoom() {
               }
             } catch (err) {
               console.error('Error deleting messages:', err);
-              fetchData(false); // Refresh on error
+              fetchData(false);
             }
           },
         },
       ]
     );
-  }, [selectedMessages, exitSelectionMode, fetchData, currentUserId]);
+  }, [uiState.selectedMessages, exitSelectionMode, fetchData, currentUserId]);
 
   const deleteMessage = async (msgId: string, forEveryone: boolean = false) => {
     const originalMessages = [...messages];
@@ -1481,130 +1425,142 @@ export default function ChatRoom() {
     }
   }, []);
 
-  async function handleSend() {
-    if (!newMessage.trim() || sendingText || !currentUserId) return;
-    
-    // Check if blocked before sending
-    if (isBlockedByThem) {
-      Alert.alert('Cannot Send Message', 'You have been blocked by this user.');
-      return;
-    }
-    
-    const text = newMessage.trim();
-    setSendingText(true);
+  async function handleSend() { 
+  if (!newMessage.trim() || sendingText || !currentUserId) return;
+  
+  // Check if blocked before sending
+  if (uiState.isBlockedByThem) {
+    Alert.alert('Cannot Send Message', 'You have been blocked by this user.');
+    return;
+  }
+  
+  const text = newMessage.trim();
+  setSendingText(true);
 
-    if (editingMessage) {
-      const originalMsg = editingMessage.content;
+  if (editingMessage) {
+    const originalMsg = editingMessage.content;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === editingMessage.id
+          ? { ...m, content: text, is_edited: true }
+          : m,
+      ),
+    );
+
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .update({ content: text, is_edited: true })
+        .eq("id", editingMessage.id);
+
+      if (error) throw error;
+
+      setEditingMessage(null);
+    } catch (err: any) {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === editingMessage.id
-            ? { ...m, content: text, is_edited: true }
+            ? {
+                ...m,
+                content: originalMsg,
+                is_edited: editingMessage.is_edited,
+              }
             : m,
         ),
       );
 
-      try {
-        const { error } = await supabase
-          .from("messages")
-          .update({ content: text, is_edited: true })
-          .eq("id", editingMessage.id);
-        if (error) throw error;
-        setEditingMessage(null);
-      } catch {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === editingMessage.id
-              ? {
-                  ...m,
-                  content: originalMsg,
-                  is_edited: editingMessage.is_edited,
-                }
-              : m,
-          ),
-        );
-        Alert.alert("Error", "Failed to update message");
-      } finally {
-        setSendingText(false);
-        setNewMessage("");
-        setShowEmojiPicker(false);
-      }
-    } else {
-      // 1. Create temporary message (text): do NOT mark is_sending nor startSimulatedProgress
-      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const tempMsg = {
-        id: tempId,
+      Alert.alert("Error", "Failed to update message");
+    } finally {
+      setSendingText(false);
+      setNewMessage("");
+      setShowEmojiPicker(false);
+    }
+  } else {
+    // 1. Create temporary message (text)
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const tempMsg = {
+      id: tempId,
+      chat_id: chatId,
+      sender_id: currentUserId,
+      content: text,
+      created_at: new Date().toISOString(),
+      parent_id: replyingTo?.id || referencingTo?.id,
+    };
+
+    setMessages((prev) => [tempMsg, ...prev]);
+    setNewMessage("");
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+    setShowEmojiPicker(false);
+
+    const replyRef = replyingTo;
+    const referenceRef = referencingTo;
+    setReplyingTo(null);
+    setReferencingTo(null);
+
+    try {
+      const payload: any = {
         chat_id: chatId,
         sender_id: currentUserId,
         content: text,
-        created_at: new Date().toISOString(),
-        parent_id: replyingTo?.id || referencingTo?.id,
       };
 
-      setMessages((prev) => [tempMsg, ...prev]);
-      setNewMessage("");
-      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-      setShowEmojiPicker(false);
+      if (replyRef) payload.parent_id = replyRef.id;
+      if (referenceRef) payload.parent_id = referenceRef.id;
 
-      const replyRef = replyingTo;
-      const referenceRef = referencingTo;
-      setReplyingTo(null);
-      setReferencingTo(null);
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([payload])
+        .select()
+        .single();
 
-      try {
-        const payload: any = {
-          chat_id: chatId,
-          sender_id: currentUserId,
-          content: text,
-        };
-        if (replyRef) payload.parent_id = replyRef.id;
-        if (referenceRef) payload.parent_id = referenceRef.id;
+      if (error) throw error;
 
-        const { data, error } = await supabase
-          .from("messages")
-          .insert([payload])
-          .select()
-          .single();
-        if (error) throw error;
+      // Replace temp message with real one
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === data.id);
 
-        // Replace temp message with real one, avoiding duplication if realtime already added it
-        setMessages((prev) => {
-          // If realtime already added the real message (by ID), remove the temp and keep realtime message
-          const exists = prev.some((m) => m.id === data.id);
-          if (exists) {
-            return prev.filter((m) => m.id !== tempId);
-          }
-          // otherwise replace temp with server data
-          return prev.map((m) => (m.id === tempId ? data : m));
-        });
-
-        // Clear typing status
-        if (presenceChannelRef.current) {
-          presenceChannelRef.current.track({
-            online_at: new Date().toISOString(),
-            typing: false,
-          });
+        if (exists) {
+          return prev.filter((m) => m.id !== tempId);
         }
-      } catch (err) {
-        setMessages((prev) => prev.filter((m) => m.id !== tempId));
-        Alert.alert("Error", "Failed to send message");
-      } finally {
-        setSendingText(false);
-        setShowEmojiPicker(false);
+
+        return prev.map((m) => (m.id === tempId ? data : m));
+      });
+
+      // Clear typing status
+      if (presenceChannelRef.current) {
+        presenceChannelRef.current.track({
+          typing: false,
+        });
       }
+    } catch (err: any) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+
+      let errorMessage = "Failed to send message";
+
+      if (err?.message) {
+        errorMessage = err.message;
+      } else if (err?.details) {
+        errorMessage = err.details;
+      }
+
+      Alert.alert("Error", errorMessage);
+    } finally {
+      setSendingText(false);
+      setShowEmojiPicker(false);
     }
   }
+}
+
 
   // Search Messages Function
-  const handleSearchMessages = async (query: string) => {
+  const handleSearchMessages = useCallback(async (query: string) => {
     if (!query.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      setSearchQuery('');
+      setUiState(prev => ({ ...prev, searchResults: [], isSearching: false, searchQuery: '' }));
       return;
     }
 
-    setIsSearching(true);
-    setSearchQuery(query);
+    setUiState(prev => ({ ...prev, isSearching: true, searchQuery: query }));
 
     try {
       const { data, error } = await supabase
@@ -1615,21 +1571,20 @@ export default function ChatRoom() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setSearchResults(data || []);
+      setUiState(prev => ({ ...prev, searchResults: data || [] }));
     } catch (error) {
       console.error('Search error:', error);
-      // Fallback to simple text search
       const filtered = messages.filter(msg => 
         msg.content && msg.content.toLowerCase().includes(query.toLowerCase())
       );
-      setSearchResults(filtered);
+      setUiState(prev => ({ ...prev, searchResults: filtered }));
     } finally {
-      setIsSearching(false);
+      setUiState(prev => ({ ...prev, isSearching: false }));
     }
-  };
+  }, [chatId, messages]);
 
   // Block User Function
-  const handleBlockUser = async () => {
+  const handleBlockUser = useCallback(async () => {
     if (!currentUserId || !chatDetails) return;
     
     const otherUserId = chatDetails.buyer_id === currentUserId 
@@ -1637,24 +1592,27 @@ export default function ChatRoom() {
       : chatDetails.buyer_id;
 
     try {
-      await supabase
+      const { data, error } = await supabase
         .from('blocked_users')
         .insert({
           blocker_id: currentUserId,
           blocked_id: otherUserId,
-        });
+        })
+        .select();
       
-      setIsUserBlocked(true);
-      setOptionsModalVisible(false);
+      if (error) throw error;
+      
+      setUiState(prev => ({ ...prev, isUserBlocked: true, optionsModalVisible: false }));
       Alert.alert('Success', 'User blocked successfully');
     } catch (error) {
+      console.error('Block user error:', error);
       Alert.alert('Error', 'Failed to block user');
-      throw error; // Re-throw to show loading state properly
+      throw error;
     }
-  };
+  }, [currentUserId, chatDetails]);
 
   // Unblock User Function
-  const handleUnblockUser = async () => {
+  const handleUnblockUser = useCallback(async () => {
     if (!currentUserId || !chatDetails) return;
     
     const otherUserId = chatDetails.buyer_id === currentUserId 
@@ -1668,14 +1626,13 @@ export default function ChatRoom() {
         .eq('blocker_id', currentUserId)
         .eq('blocked_id', otherUserId);
       
-      setIsUserBlocked(false);
-      setOptionsModalVisible(false);
+      setUiState(prev => ({ ...prev, isUserBlocked: false, optionsModalVisible: false }));
       Alert.alert('Success', 'User unblocked successfully');
     } catch (error) {
       Alert.alert('Error', 'Failed to unblock user');
-      throw error; // Re-throw to show loading state properly
+      throw error;
     }
-  };
+  }, [currentUserId, chatDetails]);
 
   if (loading) {
     return (
@@ -1699,8 +1656,8 @@ export default function ChatRoom() {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
       <ImageZoomModal
-        imageUri={selectedImage}
-        onClose={() => setSelectedImage(null)}
+        imageUri={uiState.selectedImage}
+        onClose={() => setUiState(prev => ({ ...prev, selectedImage: null }))}
       />
 
       <KeyboardAvoidingView
@@ -1728,25 +1685,24 @@ export default function ChatRoom() {
               }
             }}
             peerName={peerName}
-            isPeerOnline={isPeerOnline}
-            isPeerTyping={isPeerTyping}
-            peerLastSeen={peerLastSeen}
-            onOptionsPress={() => setOptionsModalVisible(true)}
+            isPeerOnline={presenceState.isPeerOnline}
+            isPeerTyping={presenceState.isPeerTyping}
+            peerLastSeen={presenceState.peerLastSeen}
+            onOptionsPress={() => setUiState(prev => ({ ...prev, optionsModalVisible: true }))}
           />
 
           {/* Chat-level preparing indicator (shows immediately after capture/selection/recording) */}
-          <PreparingFileOverlay visible={isPreparingFile} />
+          <PreparingFileOverlay visible={uiState.isPreparingFile} />
 
           {/* Search Results Header */}
-          {searchResults.length > 0 && (
+          {uiState.searchResults.length > 0 && (
             <View style={[styles.searchHeader, { backgroundColor: colors.surface }]}>
               <Text style={[styles.searchHeaderText, { color: colors.text }]}>
-                {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for "{searchQuery}"
+                {uiState.searchResults.length} result{uiState.searchResults.length !== 1 ? 's' : ''} for "{uiState.searchQuery}"
               </Text>
               <TouchableOpacity 
                 onPress={() => {
-                  setSearchResults([]);
-                  setSearchQuery('');
+                  setUiState(prev => ({ ...prev, searchResults: [], searchQuery: '' }));
                 }}
                 style={styles.clearSearchButton}
               >
@@ -1757,10 +1713,10 @@ export default function ChatRoom() {
 
           <FlatList
             ref={flatListRef}
-            data={isSearching ? [] : searchResults.length > 0 ? searchResults : messages}
+            data={uiState.isSearching ? [] : uiState.searchResults.length > 0 ? uiState.searchResults : messages}
             renderItem={({ item, index }) => {
               const currentMsgDate = new Date(item.created_at).toDateString();
-              const dataSource = searchResults.length > 0 ? searchResults : messages;
+              const dataSource = uiState.searchResults.length > 0 ? uiState.searchResults : messages;
               const nextMsg = dataSource[index + 1];
               const nextMsgDate = nextMsg
                 ? new Date(nextMsg.created_at).toDateString()
@@ -1771,26 +1727,44 @@ export default function ChatRoom() {
                 ? messageMap.get(item.parent_id)
                 : null;
 
+              // Render audio messages with dedicated AudioMessageBubble
+              if (item.file_type === 'audio') {
+                return (
+                  <View key={item.id} style={{ marginVertical: 4, paddingHorizontal: 16 }}>
+                    {showDateHeader && (
+                      <Text style={[{ textAlign: 'center', fontSize: 12, marginVertical: 8 }, { color: colors.textSecondary }]}>
+                        {currentMsgDate}
+                      </Text>
+                    )}
+                    <View style={{
+                      alignSelf: item.sender_id === currentUserId ? 'flex-end' : 'flex-start',
+                      marginLeft: item.sender_id === currentUserId ? 50 : 0,
+                      marginRight: item.sender_id === currentUserId ? 0 : 50,
+                    }}>
+                      <AudioMessageBubble 
+                        sourceUri={item.file_url} 
+                        isCurrentUser={item.sender_id === currentUserId}
+                        isUploading={item.is_sending || false}
+                      />
+                    </View>
+                  </View>
+                );
+              }
+
               return (
                 <MessageItem
                   item={item}
+                  index={index}
                   currentUserId={currentUserId}
                   replyContent={repliedMessage?.content || null}
                   showDateHeader={showDateHeader}
                   activeMenuId={activeMenuId}
-                  playingId={playingId}
-                  playbackPosition={playbackStatus.position}
-                  playbackDuration={playbackStatus.duration}
-                  isPlaybackPlaying={playbackStatus.isPlaying}
                   uploadProgress={uploadProgress}
                   playingVideoId={playingVideoId}
                   videoRefs={videoRefs}
-                  loadingAudioId={loadingAudioId}
                   onActionMenu={handleActionMenu}
-                  onSetSelectedImage={setSelectedImage}
+                  onSetSelectedImage={(uri) => setUiState(prev => ({ ...prev, selectedImage: uri }))}
                   onSetPlayingVideoId={setPlayingVideoId}
-                  onPlaySound={playSound}
-                  onAudioSkip={audioSkip}
                   onReactionToggle={handleReactionToggle}
                   onStartReply={startReply}
                   onStartReference={startReference}
@@ -1799,28 +1773,22 @@ export default function ChatRoom() {
                   onConfirmDelete={confirmDelete}
                   highlightedId={highlightedId}
                   onReplyPress={handleReplyPress}
-                  searchQuery={searchResults.length > 0 ? searchQuery : ''}
-                  isSelectionMode={isSelectionMode}
-                  isSelected={selectedMessages.has(item.id)}
+                  searchQuery={uiState.searchResults.length > 0 ? uiState.searchQuery : ''}
+                  isSelectionMode={uiState.isSelectionMode}
+                  isSelected={uiState.selectedMessages.has(item.id)}
                   onToggleSelection={toggleMessageSelection}
-                  setIsSelectionMode={setIsSelectionMode}
-                  setSelectedMessages={setSelectedMessages}
+                  setIsSelectionMode={(value) => setUiState(prev => ({ ...prev, isSelectionMode: value }))}
+                  setSelectedMessages={(value) => setUiState(prev => ({ ...prev, selectedMessages: value }))}
                   replyingTo={replyingTo}
                   referencingTo={referencingTo}
                   swipeHighlightedId={swipeHighlightedId}
                 />
               );
             }}
-            keyExtractor={(i) => String(i.id)}
+            keyExtractor={(i) => i.id.toString()}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.listContent}
-            extraData={{
-              activeMenuId,
-              highlightedId,
-              swipeHighlightedId,
-              isSelectionMode,
-              selectedCount: selectedMessages.size
-            }}
+            extraData={activeMenuId}
             inverted
             CellRendererComponent={CellRenderer}
             refreshControl={
@@ -1840,32 +1808,32 @@ export default function ChatRoom() {
           />
 
           {/* Selection Action Bar */}
-          {isSelectionMode && (
+          {uiState.isSelectionMode && (
             <View style={[styles.selectionBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
               <View style={styles.selectionInfo}>
                 <Text style={[styles.selectionText, { color: colors.text }]}>
-                  {selectedMessages.size} selected
+                  {uiState.selectedMessages.size} selected
                 </Text>
               </View>
               <View style={styles.selectionActions}>
-                <TouchableOpacity onPress={selectAllMessages} style={styles.actionButton} disabled={isTogglingSelection}>
-                  {isTogglingSelection ? (
+                <TouchableOpacity onPress={selectAllMessages} style={styles.actionButton} disabled={uiState.isTogglingSelection}>
+                  {uiState.isTogglingSelection ? (
                     <View style={styles.spinnerContainer}>
                       <ActivityIndicator size={12} color={colors.primary} />
                       <Text style={[styles.actionButtonText, { color: colors.primary, marginLeft: 6 }]}>
-                        {selectedMessages.size === messages.length ? 'Unselecting...' : 'Selecting...'}
+                        {uiState.selectedMessages.size === messages.length ? 'Unselecting...' : 'Selecting...'}
                       </Text>
                     </View>
                   ) : (
                     <Text style={[styles.actionButtonText, { color: colors.primary }]}>
-                      {selectedMessages.size === messages.length ? 'Unselect All' : 'Select All'}
+                      {uiState.selectedMessages.size === messages.length ? 'Unselect All' : 'Select All'}
                     </Text>
                   )}
                 </TouchableOpacity>
                 <TouchableOpacity 
                   onPress={deleteSelectedMessages} 
-                  style={[styles.actionButton, { opacity: selectedMessages.size > 0 ? 1 : 0.5 }]}
-                  disabled={selectedMessages.size === 0}
+                  style={[styles.actionButton, { opacity: uiState.selectedMessages.size > 0 ? 1 : 0.5 }]}
+                  disabled={uiState.selectedMessages.size === 0}
                 >
                   <Text style={[styles.actionButtonText, { color: '#ef4444' }]}>Delete</Text>
                 </TouchableOpacity>
@@ -1879,7 +1847,7 @@ export default function ChatRoom() {
           <ChatInputBar
             inputRef={inputRef as React.RefObject<TextInput>}
             newMessage={newMessage}
-            isRecording={isRecording}
+            isRecording={uiState.isRecording}
             sendingText={sendingText}
             showEmojiPicker={showEmojiPicker}
             editingMessage={editingMessage}
@@ -1899,6 +1867,12 @@ export default function ChatRoom() {
               // Clear both regular and swipe highlights when cancelling
               setHighlightedId(null);
               setSwipeHighlightedId(null);
+              // Clear typing status when input is cleared
+              if (presenceChannelRef.current) {
+                presenceChannelRef.current.track({
+                  typing: false,
+                });
+              }
             }}
           />
         </Pressable>
@@ -1906,8 +1880,8 @@ export default function ChatRoom() {
 
       {/* Chat Options Modal */}
       <ChatOptionsModal
-        visible={optionsModalVisible}
-        onClose={() => setOptionsModalVisible(false)}
+        visible={uiState.optionsModalVisible}
+        onClose={() => setUiState(prev => ({ ...prev, optionsModalVisible: false }))}
         chatId={chatId}
         otherUserId={chatDetails?.buyer_id === currentUserId ? chatDetails?.seller_id || null : chatDetails?.buyer_id || null}
         otherUserName={peerName}
@@ -1916,7 +1890,7 @@ export default function ChatRoom() {
         onBlockUser={handleBlockUser}
         onUnblockUser={handleUnblockUser}
         onSelectMessages={startSelectionMode}
-        isUserBlocked={isUserBlocked}
+        isUserBlocked={uiState.isUserBlocked}
         onChatDeleted={() => {
           // Stay in chat and refresh to show empty state
           fetchData(false);

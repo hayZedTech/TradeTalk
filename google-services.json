@@ -15,12 +15,15 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBt8T85J4zijnzsHeOBKZzxwawKVNF9QUA"
+          "current_key": "AIzaSyDbWfeRXjjsI-vrBvN7qGBYbqufj9Z5GMM"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": []
+        },
+        "firebase_messaging_service": {
+          "enabled": true
         }
       }
     }

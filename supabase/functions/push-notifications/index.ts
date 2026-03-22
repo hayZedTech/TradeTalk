@@ -10,14 +10,55 @@ serve(async (req) => {
 
     const payload = await req.json();
     const record = payload.record;
+    // Auto-detect type: friend_request has receiver_id, message has chat_id
+    const type = record?.receiver_id && !record?.chat_id ? 'friend_request' : 'message';
 
-    console.log("Function triggered for message ID:", record?.id);
+    console.log("Function triggered, type:", type, "record ID:", record?.id);
 
-    if (!record || !record.chat_id) {
-      return new Response("Missing record or chat_id", { status: 400 });
+    if (!record || (!record.chat_id && !record.receiver_id)) {
+      return new Response("Missing record", { status: 400 });
     }
 
-    // 1. Fetch Chat to find the recipient
+    // --- Friend Request Notification ---
+    if (type === 'friend_request') {
+      const recipientId = record.status === 'accepted' ? record.sender_id : record.receiver_id;
+
+      const [recipientResult, senderResult] = await Promise.all([
+        supabaseAdmin.from('users').select('push_token').eq('id', recipientId).single(),
+        supabaseAdmin.from('users').select('username').eq('id',
+          record.status === 'accepted' ? record.receiver_id : record.sender_id
+        ).single(),
+      ]);
+
+      const pushToken = recipientResult.data?.push_token;
+      const actorName = senderResult.data?.username || 'Someone';
+
+      if (!pushToken) {
+        return new Response('No token found', { status: 200 });
+      }
+
+      const isAccepted = record.status === 'accepted';
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: pushToken,
+          title: isAccepted ? '🎉 Friend Request Accepted' : '👋 New Friend Request',
+          body: isAccepted
+            ? `${actorName} accepted your friend request`
+            : `${actorName} sent you a friend request`,
+          data: { type: 'friend_request', requestId: record.id },
+          sound: 'default',
+          priority: 'high',
+          channelId: 'default',
+          _fed_experienceId: '@hayzed001/tradetalk',
+        }),
+      });
+
+      return new Response('Friend request notification sent', { status: 200 });
+    }
+
+    // --- Message Notification ---
     const { data: chat, error: chatErr } = await supabaseAdmin
       .from("chats")
       .select("buyer_id, seller_id")

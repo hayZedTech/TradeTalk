@@ -72,6 +72,17 @@ export interface Message {
   reactions?: Reaction[];
 }
 
+export interface FriendRequest {
+  id: string;
+  sender_id: string;
+  receiver_id: string;
+  status: 'pending' | 'accepted' | 'declined';
+  created_at: string;
+  updated_at: string;
+  sender?: User;
+  receiver?: User;
+}
+
 /** 👇 NEW: Chat type */
 export type ChatType = "product" | "direct";
 

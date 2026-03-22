@@ -1,4 +1,19 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# SECRETS - Keep these at the top!
+.env
+.env*.local
+*.pem
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Google/Firebase Configs (Crucial to stay out of GitHub)
+google-services.json
+android/app/google-services.json
+GoogleService-Info.plist
+ios/GoogleService-Info.plist
+ios/Runner/GoogleService-Info.plist
 
 # dependencies
 node_modules/
@@ -9,36 +24,25 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
+# Native folders (Uncommented to prevent pushing heavy generated files)
+/ios
+/android
 
-# Metro
+# Build artifacts
+*.apk
+*.aab
+*.dex
+*.class
+
+# Metro & Debug
 .metro-health-check*
-
-# debug
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
+# OS files
 .DS_Store
-*.pem
-
-# local env files
-.env
-.env*.local
+Thumbs.db
 
 # typescript
 *.tsbuildinfo
-
-app-example
-
-# generated native folders
-/ios
-/android

@@ -24,17 +24,28 @@ const ChatHeader = ({
   const formatLastSeen = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
-    const diffInHours = Math.abs(now.getTime() - date.getTime()) / 36e5;
-
-    if (diffInHours < 24 && date.getDate() === now.getDate()) {
+    
+    // Get start of today and yesterday for accurate date comparison
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    
+    const messageDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    
+    // If it's today, show time
+    if (messageDate.getTime() === today.getTime()) {
       return `at ${date.toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
       })}`;
-    } else if (diffInHours < 48 && date.getDate() === now.getDate() - 1) {
+    }
+    // If it's yesterday, show "Yesterday"
+    else if (messageDate.getTime() === yesterday.getTime()) {
       return "Yesterday";
-    } else {
+    }
+    // Otherwise show the date
+    else {
       return date.toLocaleDateString();
     }
   };

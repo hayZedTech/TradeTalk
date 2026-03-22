@@ -1,7 +1,6 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Video } from 'react-native-compressor';
-import { Audio } from 'expo-av';
+import { Video, Audio as AudioCompressor } from 'react-native-compressor';
 import { Alert } from 'react-native';
 
 /**
@@ -16,31 +15,15 @@ const LIMITS = {
 };
 
 /**
- * Standard Audio Recording Settings
- * Use these with: Audio.Recording.createAsync(AUDIO_RECORDING_CONFIG)
- * Updated with 'web' property to satisfy TypeScript RecordingOptions requirement.
+ * Standard Audio Recording Settings for react-native-nitro-sound
+ * These settings provide optimal quality/size balance for voice messages
  */
 export const AUDIO_RECORDING_CONFIG = {
-  android: {
-    extension: '.m4a',
-    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-    audioEncoder: Audio.AndroidAudioEncoder.AAC,
-    sampleRate: 44100,
-    numberOfChannels: 1, // Mono saves 50% space
-    bitRate: 64000,      // 64kbps is perfect for clear voice notes
-  },
-  ios: {
-    extension: '.m4a',
-    outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-    audioQuality: Audio.IOSAudioQuality.MEDIUM,
-    sampleRate: 44100,
-    numberOfChannels: 1,
-    bitRate: 64000,
-  },
-  web: {
-    mimeType: 'audio/webm',
-    bitsPerSecond: 128000,
-  },
+  sampleRate: 44100,
+  channels: 1,        // Mono saves 50% space
+  bitRate: 64000,     // 64kbps is perfect for clear voice notes
+  format: 'm4a',      // Compatible format
+  quality: 'medium',  // Balance between quality and file size
 };
 
 /**
@@ -97,8 +80,13 @@ export async function validateAndProcessMedia(uri, type) {
       });
     }
 
-    // AUDIO: No post-processing needed if using AUDIO_RECORDING_CONFIG.
-    // If it's a gallery upload, Gate 2 will catch it if it's too big.
+    // AUDIO: Use original file without compression to prevent corruption
+    else if (type === 'audio') {
+      console.log('Using original audio file without compression');
+      const originalInfo = await FileSystem.getInfoAsync(uri);
+      console.log('Original audio file size:', originalInfo.size, 'bytes');
+      processedUri = uri; // Use original file without any compression
+    }
 
     // GATE 2: Final Size Check (The Supabase Guard)
     const finalInfo = await FileSystem.getInfoAsync(processedUri);

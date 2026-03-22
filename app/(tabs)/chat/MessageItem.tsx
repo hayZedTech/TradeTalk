@@ -1,9 +1,10 @@
-import { Ionicons } from "@expo/vector-icons";
-import { AVPlaybackStatus, ResizeMode, Video } from "expo-av";
-import React, { memo, useState } from "react";
+﻿import { Ionicons } from "@expo/vector-icons";
+import { VideoView, useVideoPlayer } from 'expo-video';
+import React, { memo, useRef, useState, useEffect, useCallback, useMemo } from "react";
 import {
   ActivityIndicator,
   Image,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -12,39 +13,71 @@ import {
   View,
   Animated,
 } from "react-native";
+
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { Message } from "../../../lib/supabase";
-import { formatDate, formatDuration, formatTime } from "./utils";
+import { formatDate, formatDuration, formatTime } from "../../../utils/utils";
 import { useTheme } from "../../../contexts/ThemeContext";
 
-const EMOJIS = ["👍", "❤️", "😂", "🤣", "🥰", "🤫", "😮", "😢", "🙏", "🔥", "👏", "🎉", "💯", "🤔", "👀", "🏃‍♂️"];
+const EMOJI_TABS = [
+  {
+    label: "😀",
+    title: "Smileys",
+    emojis: [
+      "😀","😂","🥰","😎","😢","😡","🤔","😮","🤣","😅","😇","🥳",
+      "😏","😬","🤯","😴","🥺","😤","🤗","😑","😜","🤪","😒","😳",
+      "🫠","🤭","😶","🫡","😈","🤫","🫢","😲", 
+    ],
+  },
+  {
+    label: "👍",
+    title: "Gestures",
+    emojis: [
+      "👍","👎","👏","🙏","🤝","✌️","🤞","👀","💪","🤙","👋","🫶",
+      "🤲","🫱","🫳","☝️","👆","👇","👈","👉","🤘","🤟","🖖","✋",
+      "🖐️","👌","🤌","🤏","🫰","💅","🫵","🙌"
+    ],
+  },
+  {
+    label: "❤️",
+    title: "Hearts",
+    emojis: [
+      "❤️","🧡","💛","💚","💙","💜","🖤","🤍","💔","❤️‍🔥","💕","💞",
+      "💓","💗","💖","💝","💘","💟","♥️","❣️","🫀","💌","💋","😍",
+      "🥰","😘","💑","👫","💏","🌹","💐","🫦"
+    ],
+  },
+  {
+    label: "🎉",
+    title: "Celebration",
+    emojis: [
+      "🎉","🔥","💯","🎊","🏆","⚡","🌟","💥","🎯","🚀","👑","💎",
+      "🏅","🥇","🎖️","🎀","🎁","🪄","✨","🎆","🎇","🧨","🪅",
+      "🎠","🎡","🎢","🎪","🎭","🎬","🎤","🎸"
+    ],
+  },
+];
+
+const EMOJIS = EMOJI_TABS[0].emojis.slice(0, 7);
+
 
 interface MessageItemProps {
   item: any;
-  // index: number; // Removed: index often changes if list is inverted/modified, prefer deriving data in parent
-  // messages: any[]; // Removed: Causes re-renders on every message update
   currentUserId: string | null;
-  replyContent: string | null; // Added: Pass only the content needed
-  showDateHeader: boolean; // Added: Pre-calculate this
+  replyContent: string | null;
+  showDateHeader: boolean;
   activeMenuId: string | null;
-  playingId: string | null;
-  playbackPosition: number; // Changed from object to primitive
-  playbackDuration: number; // Changed from object to primitive
-  isPlaybackPlaying: boolean; // Changed from object to primitive
   uploadProgress: Record<string, number>;
   playingVideoId: string | null;
-  videoRefs: React.MutableRefObject<Record<string, any>>;
-  loadingAudioId: string | null;
+  videoRefs: React.MutableRefObject<Record<string, any>>; 
   onActionMenu: (id: string | null) => void;
   onSetSelectedImage: (uri: string) => void;
   onSetPlayingVideoId: (id: string | null) => void;
-  onPlaySound: (id: string, uri: string) => void;
-  onAudioSkip: (delta: number) => void;
   onReactionToggle: (message: Message, emoji: string) => void;
   onStartReply: (message: Message) => void;
   onStartReference: (message: Message) => void;
   onStartEdit: (message: Message) => void;
-  onDownloadFile: (url: string, filename: string) => void;
+  onDownloadFile: (url: string, filename: string) => void;  
   onConfirmDelete: (id: string) => void;
   onReplyPress: (id: string) => void;
   highlightedId: string | null;
@@ -57,6 +90,7 @@ interface MessageItemProps {
   replyingTo?: any | null;
   referencingTo?: any | null;
   swipeHighlightedId?: string | null;
+  index: number;
 }
 
 const MessageItem = memo((props: MessageItemProps) => {
@@ -66,19 +100,12 @@ const MessageItem = memo((props: MessageItemProps) => {
     replyContent,
     showDateHeader,
     activeMenuId,
-    playingId,
-    playbackPosition, 
-    playbackDuration, 
-    isPlaybackPlaying, 
     uploadProgress,
     playingVideoId,
     videoRefs,
-    loadingAudioId,
     onActionMenu,
     onSetSelectedImage,
     onSetPlayingVideoId,
-    onPlaySound,
-    onAudioSkip,
     onReactionToggle,
     onStartReply,
     onStartReference,
@@ -94,28 +121,80 @@ const MessageItem = memo((props: MessageItemProps) => {
     setIsSelectionMode,
     setSelectedMessages,
     swipeHighlightedId,
+    index,
   } = props;
-  const [isSelectingMessage, setIsSelectingMessage] = useState(false);
-  const [isVideoLoading, setIsVideoLoading] = useState(true);
+  
+  // Minimize state variables
+  const [localState, setLocalState] = useState({
+    isSelectingMessage: false,
+    isVideoLoading: true,
+    showAllEmojis: false,
+    activeTab: 0,
+    isSwipeActive: false,
+  });
+  
   const [swipeAnimation] = useState(() => new Animated.Value(0));
-  const [isSwipeActive, setIsSwipeActive] = useState(false);
+  const bubbleRef = useRef<any>(null);
   const { colors } = useTheme();
   const mine = item.sender_id === currentUserId;
   const isMenuOpen = activeMenuId === item.id;
-  const isLoadingAudio = loadingAudioId === item.id;
+
+  // Create video player only when needed
+  const isVideoItem = item.file_type === "video";
+  const isActiveVideo = playingVideoId === item.id;
+
+  const videoPlayer = useMemo(() => {
+    if (!isVideoItem || !isActiveVideo) return null;
+    return useVideoPlayer(item.file_url!, (player) => {
+      player.loop = false;
+    });
+  }, [isVideoItem, isActiveVideo, item.file_url]);
+
+  useEffect(() => {
+    if (videoPlayer && !isActiveVideo) { 
+      videoPlayer.pause();
+    }
+  }, [videoPlayer, isActiveVideo]);
+
+  // Handle video player events
+  useEffect(() => {
+    if (videoPlayer) {
+      const statusSubscription = videoPlayer.addListener('statusChange', (status) => {
+        if (status.status === 'readyToPlay') {
+          setLocalState(prev => ({ ...prev, isVideoLoading: false }));
+        }
+      });
+      const playToEndSubscription = videoPlayer.addListener('playToEnd', () => {
+        onSetPlayingVideoId(null);
+      });
+      return () => {
+        statusSubscription?.remove();
+        playToEndSubscription?.remove();
+      };
+    }
+  }, [videoPlayer, onSetPlayingVideoId]);
+
+  // Reset video loading state when video changes
+  useEffect(() => {
+    if (playingVideoId !== item.id) {
+      setLocalState(prev => ({ ...prev, isVideoLoading: true }));
+    }
+  }, [playingVideoId, item.id]);
 
   // Use global swipe highlight state
   // const isSwipeHighlighted = swipeHighlightedId === item.id;
 
-  // Reconstruct playbackStatus for internal use if needed, or use individual props directly
-  const playbackStatus = {
-    position: playbackPosition,
-    duration: playbackDuration,
-    isPlaying: isPlaybackPlaying,
-  };
-
-  const isThisPlaying = playingId === item.id;
   const isHighlighted = highlightedId === item.id;
+
+  // Debug audio state for this message (throttled)
+  const debugTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    return () => {
+      if (debugTimeoutRef.current) {
+        clearTimeout(debugTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const progress = uploadProgress[item.id] ?? null;
 
@@ -144,42 +223,32 @@ const MessageItem = memo((props: MessageItemProps) => {
     );
   };
 
-  const handleSwipeGesture = (event: any) => {
+  const handleSwipeGesture = useCallback((event: any) => {
     const { state, translationX } = event.nativeEvent;
     
     if (state === State.BEGAN) {
-      setIsSwipeActive(true);
+      setLocalState(prev => ({ ...prev, isSwipeActive: true }));
     } else if (state === State.ACTIVE) {
-      // Animate the bubble during swipe (limit to 80px max)
       const clampedTranslation = Math.max(0, Math.min(80, translationX));
       swipeAnimation.setValue(clampedTranslation);
     } else if (state === State.END || state === State.CANCELLED) {
-      setIsSwipeActive(false);
+      setLocalState(prev => ({ ...prev, isSwipeActive: false }));
       
-      // Swipe right (positive translationX > 25)
       if (translationX > 25) {
         if (mine) {
-          // Reference own message
           onStartReference(item);
         } else {
-          // Reply to others' message
           onStartReply(item);
         }
       }
       
-      // Animate back to original position using JS animation only
       Animated.timing(swipeAnimation, {
         toValue: 0,
         duration: 150,
         useNativeDriver: false,
       }).start();
     }
-  };
-
-  // const handleVideoStatus = (status: AVPlaybackStatus, videoId: string) => {
-  //   // Handle video playback status if needed
-  //   // This can be expanded based on requirements
-  // };
+  }, [mine, item, onStartReference, onStartReply, swipeAnimation]);
 
   return (
     <View>
@@ -192,7 +261,7 @@ const MessageItem = memo((props: MessageItemProps) => {
           <View style={[styles.dateLine, { backgroundColor: colors.border }]} />
         </View>
       )}
-      <View style={[styles.row, mine ? styles.right : styles.left]}>
+      <View style={[styles.row, mine ? styles.right : styles.left, isMenuOpen && { zIndex: 99999, elevation: 99999 }]}>
         {/* Selection checkbox - show for all messages in selection mode */}
         {isSelectionMode && (
           <TouchableOpacity 
@@ -218,6 +287,7 @@ const MessageItem = memo((props: MessageItemProps) => {
         shouldCancelWhenOutside={false}
       >
           <Animated.View
+            ref={bubbleRef}
             style={[
               styles.bubble,
               mine ? [styles.myBubble, { backgroundColor: colors.bubble.mine }] : [styles.theirBubble, { backgroundColor: colors.bubble.theirs }],
@@ -226,6 +296,7 @@ const MessageItem = memo((props: MessageItemProps) => {
               isSelected && { backgroundColor: colors.primary + '80' },
               item.is_deleted && { opacity: 0.6 },
               { transform: [{ translateX: swipeAnimation }] },
+
             ]}
           >
             <TouchableOpacity
@@ -291,122 +362,52 @@ const MessageItem = memo((props: MessageItemProps) => {
           ) : item.file_type === "video" ? (
             <TouchableOpacity
               activeOpacity={0.9}
-              onPress={() =>
-                onSetPlayingVideoId(playingVideoId === item.id ? null : item.id)
-              }
+              onPress={() => {
+                if (playingVideoId === item.id) {
+                  onSetPlayingVideoId(null);
+                } else {
+                  onSetPlayingVideoId(item.id);
+                }
+              }}
               onLongPress={() => onActionMenu(item.id)}
               style={styles.videoContainer}
             >
-              <Video
-                ref={(ref) => {
-                  if (ref) {
-                    videoRefs.current[item.id] = ref;
-                  }
-                }}
-                source={{ uri: item.file_url! }}
-                resizeMode={ResizeMode.COVER}
-                shouldPlay={playingVideoId === item.id}
-                useNativeControls={playingVideoId === item.id}
-                style={styles.messageVideo}
-                onReadyForDisplay={() => setIsVideoLoading(false)}
-                // onPlaybackStatusUpdate={(status) =>
-                //   handleVideoStatus(status, item.id)
-                // }
-              />
-              {isVideoLoading && playingVideoId !== item.id && (
+              {isActiveVideo && videoPlayer ? (
+                <VideoView
+                  ref={(ref) => {
+                    if (ref) {
+                      videoRefs.current[item.id] = ref;
+                    }
+                  }}
+                  style={styles.messageVideo}
+                  player={videoPlayer}
+                  nativeControls={false}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={[styles.messageVideo, styles.videoPlaceholder]}>
+                  <Ionicons name="play-circle" size={42} color="#fff" />
+                </View>
+              )}
+
+              {localState.isVideoLoading && isActiveVideo && (
                 <View style={[styles.messageVideo, styles.mediaLoader]}>
                   <ActivityIndicator size="large" color="#fff" />
                 </View>
               )}
+
               <View style={styles.videoBadge} pointerEvents="none">
                 <Ionicons name="videocam" size={14} color="#fff" />
                 <Text style={styles.videoBadgeText}>Video</Text>
               </View>
 
-              {playingVideoId !== item.id && (
+              {!isActiveVideo && (
                 <View style={styles.videoPlayOverlay} pointerEvents="none">
                   <Ionicons name="play-circle" size={42} color="#fff" />
                 </View>
               )}
             </TouchableOpacity>
-          ) : item.file_type === "audio" ? (
-            <View style={styles.audioBubble}>
-              <View style={styles.playBtn}>
-                {isLoadingAudio ? (
-                  <ActivityIndicator
-                    size={36}
-                    color={mine ? "#2255ee" : "#dd8811"}
-                  />
-                ) : (
-                  <TouchableOpacity
-                    onPress={() => onPlaySound(item.id, item.file_url!)}
-                  >
-                    <Ionicons
-                      name={
-                        isThisPlaying && playbackStatus.isPlaying
-                          ? "pause-circle"
-                          : "play-circle"
-                      }
-                      size={36}
-                      color={mine ? "#2255ee" : "#dd8811"}
-                    />
-                  </TouchableOpacity>
-                )}
-              </View>
-              <View style={styles.audioInfo}>
-                <Text numberOfLines={1} style={styles.audioTitle}>
-                  {item.content}
-                </Text>
-                <View style={styles.audioProgressRow}>
-                  <View style={styles.progressBarBg}>
-                    <View
-                      style={[
-                        styles.progressBarFill,
-                        {
-                          width:
-                            isThisPlaying && playbackDuration > 0
-                              ? `${(playbackStatus.position / (playbackStatus.duration || 1)) * 100}%`
-                              : "0%",
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.durationTextSmall}>
-                    {isThisPlaying && playbackStatus
-                      ? `${formatDuration(playbackStatus.position)} / ${formatDuration(playbackStatus.duration)}`
-                      : ""}
-                  </Text>
-                </View>
-                <View style={styles.audioControlRow}>
-                  <TouchableOpacity
-                    onPress={() => onAudioSkip(-15)}
-                    style={[styles.ctrlBtn, { padding: 5 }]}
-                  >
-                    <Ionicons name="play-back" size={18} color="#374151" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => onPlaySound(item.id, item.file_url!)}
-                    style={[styles.ctrlBtn, { padding: 5 }]}
-                  >
-                    <Ionicons
-                      name={
-                        isThisPlaying && playbackStatus.isPlaying
-                          ? "pause"
-                          : "play"
-                      }
-                      size={18}
-                      color="#374151"
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => onAudioSkip(15)}
-                    style={[styles.ctrlBtn, { padding: 5 }]}
-                  >
-                    <Ionicons name="play-forward" size={18} color="#374151" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+
           ) : null}
 
           {item.is_sending && progress != null && (
@@ -439,7 +440,7 @@ const MessageItem = memo((props: MessageItemProps) => {
                 styles.reactionsDisplay,
                 {
                   position: "absolute",
-                  bottom: -17,
+                  bottom: -25,
                   zIndex: 10,
                 },
                 mine
@@ -499,7 +500,7 @@ const MessageItem = memo((props: MessageItemProps) => {
             ]}
           >
             {item.is_edited && (
-              <Text style={[styles.time, { color: colors.textSecondary }]}>Edited • </Text>
+              <Text style={[styles.time, { color: colors.textSecondary }]}>Edited â€¢ </Text>
             )}
             <Text style={[styles.time, { color: colors.textSecondary }]}>
               {formatTime(item.created_at)}{" "}
@@ -532,11 +533,12 @@ const MessageItem = memo((props: MessageItemProps) => {
             style={[
               styles.menuDropdown, 
               mine ? { right: 30 } : { left: 30 },
+              index > 3 ? { top: 10 } : { bottom: 10 },
               { backgroundColor: colors.background, shadowColor: colors.text }
             ]}
           >
             <View style={styles.reactionPicker}>
-              {EMOJIS.map((emoji) => (
+              {EMOJIS.slice(0, 7).map((emoji) => (
                 <TouchableOpacity
                   key={emoji}
                   activeOpacity={0.6}
@@ -546,7 +548,48 @@ const MessageItem = memo((props: MessageItemProps) => {
                   <Text style={styles.reactionEmoji}>{emoji}</Text>
                 </TouchableOpacity>
               ))}
+              <TouchableOpacity
+                activeOpacity={0.6}
+                onPress={() => setLocalState(prev => ({ ...prev, showAllEmojis: true }))}
+                style={styles.reactionButton}
+              >
+                <Ionicons name="ellipsis-horizontal" size={24} color={colors.text} />
+              </TouchableOpacity>
             </View>
+
+            <Modal transparent animationType="fade" visible={localState.showAllEmojis} onRequestClose={() => setLocalState(prev => ({ ...prev, showAllEmojis: false }))}>
+              <Pressable style={styles.emojiModalOverlay} onPress={() => setLocalState(prev => ({ ...prev, showAllEmojis: false }))}>
+                <View style={[styles.emojiModalBox, { backgroundColor: colors.background }]}>
+                  <View style={styles.emojiTabBar}>
+                    {EMOJI_TABS.map((tab, i) => (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => setLocalState(prev => ({ ...prev, activeTab: i }))}
+                        style={[styles.emojiTab, localState.activeTab === i && { borderBottomWidth: 2, borderBottomColor: colors.primary }]}
+                      >
+                        <Text style={styles.emojiTabLabel}>{tab.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={styles.emojiModalGrid}>
+                    {EMOJI_TABS[localState.activeTab].emojis.map((emoji) => (
+                      <TouchableOpacity
+                        key={emoji}
+                        activeOpacity={0.6}
+                        onPress={() => { 
+                          onReactionToggle(item, emoji); 
+                          setLocalState(prev => ({ ...prev, showAllEmojis: false, activeTab: 0 })); 
+                          onActionMenu(null); 
+                        }}
+                        style={styles.emojiModalButton}
+                      >
+                        <Text style={styles.emojiModalEmoji}>{emoji}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              </Pressable>
+            </Modal>
 
             <View
               style={{
@@ -600,15 +643,14 @@ const MessageItem = memo((props: MessageItemProps) => {
             <TouchableOpacity
               style={styles.menuBtn}
               onPress={async () => {
-                setIsSelectingMessage(true);
+                setLocalState(prev => ({ ...prev, isSelectingMessage: true }));
                 onActionMenu(null);
-                // Start selection mode and select this message immediately
                 setIsSelectionMode?.(true);
                 setSelectedMessages?.(new Set([item.id]));
-                setIsSelectingMessage(false);
+                setLocalState(prev => ({ ...prev, isSelectingMessage: false }));
               }}
             >
-              {isSelectingMessage ? (
+              {localState.isSelectingMessage ? (
                 <ActivityIndicator size={14} color={colors.primary} />
               ) : (
                 <Ionicons name="checkmark-circle-outline" size={14} color={colors.primary} />
@@ -664,7 +706,6 @@ const styles = StyleSheet.create({
   },
 menuDropdown: {
   position: "absolute",
-  top: -250,
   borderRadius: 16,
   paddingVertical: 10,
   paddingHorizontal: 8,
@@ -731,15 +772,10 @@ menuDropdown: {
     marginRight: 8,
   },
   audioInfo: { flex: 1, justifyContent: "center" },
-  audioTitle: {
-    fontSize: 14,
-    marginBottom: 6,
-    maxWidth: "100%",
-    flexShrink: 1,
-  },
   audioProgressRow: { flexDirection: "row", alignItems: "center" },
-  audioControlRow: { flexDirection: "row", marginTop: 8 },
-  ctrlBtn: { marginRight: 12 },
+  audioControlRow: { flexDirection: "row", marginTop: 8, justifyContent: "center" },
+  ctrlBtn: { marginHorizontal: 8 },
+  progressBarContainer: { flex: 1, paddingVertical: 8 },
   progressBarBg: {
     flex: 1,
     height: 6,
@@ -748,6 +784,12 @@ menuDropdown: {
     overflow: "hidden",
   },
   progressBarFill: { height: "100%", backgroundColor: "#2255ee" },
+  audioTitle: {
+    fontSize: 14,
+    marginBottom: 6,
+    maxWidth: "100%",
+    flexShrink: 1,
+  },
   durationTextSmall: { fontSize: 11, color: "#666", marginLeft: 8 },
   videoContainer: {
     position: "relative",
@@ -774,6 +816,7 @@ menuDropdown: {
     top: "40%",
     left: "40%",
     opacity: 0.9,
+    zIndex: 10,
   },
   reactionPicker: {
     flexDirection: "row",
@@ -782,15 +825,53 @@ menuDropdown: {
     paddingHorizontal: 6,
   },
   reactionButton: {
-    width: "16%",
+    width: "25%",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 8,
-    marginBottom: 6,
     borderRadius: 10,
   },
   reactionEmoji: {
     fontSize: 20,
+  },
+  emojiModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emojiModalBox: {
+    width: 300,
+    borderRadius: 20,
+    padding: 16,
+  },
+  emojiTabBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  emojiTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  emojiTabLabel: {
+    fontSize: 22,
+  },
+  emojiModalGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+  emojiModalButton: {
+    width: "20%",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  emojiModalEmoji: {
+    fontSize: 26,
   },
   reactionsDisplay: {
     flexDirection: "row",
@@ -807,6 +888,15 @@ menuDropdown: {
   },
   reactionEmojiText: { fontSize: 12 },
   reactionCountText: { fontSize: 11, marginLeft: 3, color: "#4b5563" },
+  videoPlaceholder: {
+    width: 200,
+    height: 150,
+    borderRadius: 12,
+    marginBottom: 4,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   mediaLoader: {
     position: "absolute",
     top: 0,
@@ -835,7 +925,14 @@ menuDropdown: {
 
 const areEqual = (prevProps: MessageItemProps, nextProps: MessageItemProps) => {
   const id = nextProps.item.id;
-  
+
+  // Check video state changes
+  if ((prevProps.playingVideoId === id) !== (nextProps.playingVideoId === id)) return false;
+
+  // Check other dynamic props
+  if (prevProps.uploadProgress?.[id] !== nextProps.uploadProgress?.[id]) return false;
+  if (prevProps.searchQuery !== nextProps.searchQuery) return false;
+
   return (
     prevProps.item === nextProps.item &&
     prevProps.isSelectionMode === nextProps.isSelectionMode &&
@@ -849,3 +946,5 @@ const areEqual = (prevProps: MessageItemProps, nextProps: MessageItemProps) => {
 MessageItem.displayName = 'MessageItem';
 
 export default memo(MessageItem, areEqual);
+
+   

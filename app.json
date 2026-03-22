@@ -63,12 +63,7 @@
           "cameraPermission": "Allow TradeTalk to access your camera"
         }
       ],
-      [
-        "expo-av",
-        {
-          "microphonePermission": "Allow TradeTalk to access your microphone for voice messages."
-        }
-      ],
+
       [
         "expo-notifications",
         {
@@ -78,7 +73,9 @@
       ],
       "expo-font",
       "expo-router",
-      "react-native-compressor"
+      "react-native-compressor",
+      "expo-audio",
+      "expo-video"
     ],
     "extra": {
       "router": {},

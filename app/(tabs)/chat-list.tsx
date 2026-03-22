@@ -27,6 +27,7 @@ export default function ChatList() {
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [imageZoomVisible, setImageZoomVisible] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState<{[chatId: string]: number}>({});
 
   // 🔥 Strictly Date-focused Helper
   const formatTime = (dateString: string) => {
@@ -57,6 +58,23 @@ export default function ChatList() {
 
       const data = await chatService.getUserChats();
       const productChats = data.filter(chat => chat.type === 'product' || chat.product_id !== null);
+      
+      // Load unread counts for each chat
+      if (user) {
+        const unreadData: {[chatId: string]: number} = {};
+        await Promise.all(
+          productChats.map(async (chat) => {
+            const { count } = await supabase
+              .from('messages')
+              .select('*', { count: 'exact', head: true })
+              .eq('chat_id', chat.id)
+              .neq('sender_id', user.id)
+              .eq('is_read', false);
+            unreadData[chat.id] = count || 0;
+          })
+        );
+        setUnreadCounts(unreadData);
+      }
       
       setChats(productChats);
       applySearch(search, productChats);
@@ -164,6 +182,13 @@ export default function ChatList() {
             <Text style={styles.chatTitle} numberOfLines={1}>
               {productTitle} • @{displayName}
             </Text>
+            {unreadCounts[item.id] > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadText}>
+                  {unreadCounts[item.id] > 99 ? '99+' : unreadCounts[item.id]}
+                </Text>
+              </View>
+            )}
           </View>
           
           <View style={styles.messageRow}>
@@ -562,5 +587,20 @@ const styles = StyleSheet.create({
     width: '90%',
     height: '70%',
     borderRadius: 10,
+  },
+  unreadBadge: {
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    marginLeft: 8,
+  },
+  unreadText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
