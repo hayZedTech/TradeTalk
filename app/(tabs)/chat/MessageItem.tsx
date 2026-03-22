@@ -127,7 +127,6 @@ const MessageItem = memo((props: MessageItemProps) => {
   // Minimize state variables
   const [localState, setLocalState] = useState({
     isSelectingMessage: false,
-    isVideoLoading: true,
     showAllEmojis: false,
     activeTab: 0,
     isSwipeActive: false,
@@ -138,48 +137,6 @@ const MessageItem = memo((props: MessageItemProps) => {
   const { colors } = useTheme();
   const mine = item.sender_id === currentUserId;
   const isMenuOpen = activeMenuId === item.id;
-
-  // Create video player only when needed
-  const isVideoItem = item.file_type === "video";
-  const isActiveVideo = playingVideoId === item.id;
-
-  const videoPlayer = useMemo(() => {
-    if (!isVideoItem || !isActiveVideo) return null;
-    return useVideoPlayer(item.file_url!, (player) => {
-      player.loop = false;
-    });
-  }, [isVideoItem, isActiveVideo, item.file_url]);
-
-  useEffect(() => {
-    if (videoPlayer && !isActiveVideo) { 
-      videoPlayer.pause();
-    }
-  }, [videoPlayer, isActiveVideo]);
-
-  // Handle video player events
-  useEffect(() => {
-    if (videoPlayer) {
-      const statusSubscription = videoPlayer.addListener('statusChange', (status) => {
-        if (status.status === 'readyToPlay') {
-          setLocalState(prev => ({ ...prev, isVideoLoading: false }));
-        }
-      });
-      const playToEndSubscription = videoPlayer.addListener('playToEnd', () => {
-        onSetPlayingVideoId(null);
-      });
-      return () => {
-        statusSubscription?.remove();
-        playToEndSubscription?.remove();
-      };
-    }
-  }, [videoPlayer, onSetPlayingVideoId]);
-
-  // Reset video loading state when video changes
-  useEffect(() => {
-    if (playingVideoId !== item.id) {
-      setLocalState(prev => ({ ...prev, isVideoLoading: true }));
-    }
-  }, [playingVideoId, item.id]);
 
   // Use global swipe highlight state
   // const isSwipeHighlighted = swipeHighlightedId === item.id;
@@ -359,55 +316,6 @@ const MessageItem = memo((props: MessageItemProps) => {
                 style={styles.messageImage}
               />
             </Pressable>
-          ) : item.file_type === "video" ? (
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() => {
-                if (playingVideoId === item.id) {
-                  onSetPlayingVideoId(null);
-                } else {
-                  onSetPlayingVideoId(item.id);
-                }
-              }}
-              onLongPress={() => onActionMenu(item.id)}
-              style={styles.videoContainer}
-            >
-              {isActiveVideo && videoPlayer ? (
-                <VideoView
-                  ref={(ref) => {
-                    if (ref) {
-                      videoRefs.current[item.id] = ref;
-                    }
-                  }}
-                  style={styles.messageVideo}
-                  player={videoPlayer}
-                  nativeControls={false}
-                  contentFit="cover"
-                />
-              ) : (
-                <View style={[styles.messageVideo, styles.videoPlaceholder]}>
-                  <Ionicons name="play-circle" size={42} color="#fff" />
-                </View>
-              )}
-
-              {localState.isVideoLoading && isActiveVideo && (
-                <View style={[styles.messageVideo, styles.mediaLoader]}>
-                  <ActivityIndicator size="large" color="#fff" />
-                </View>
-              )}
-
-              <View style={styles.videoBadge} pointerEvents="none">
-                <Ionicons name="videocam" size={14} color="#fff" />
-                <Text style={styles.videoBadgeText}>Video</Text>
-              </View>
-
-              {!isActiveVideo && (
-                <View style={styles.videoPlayOverlay} pointerEvents="none">
-                  <Ionicons name="play-circle" size={42} color="#fff" />
-                </View>
-              )}
-            </TouchableOpacity>
-
           ) : null}
 
           {item.is_sending && progress != null && (

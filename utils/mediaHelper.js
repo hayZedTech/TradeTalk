@@ -11,7 +11,7 @@ import { Alert } from 'react-native';
 const LIMITS = {
   IMAGE: { maxOriginal: 12 * 1024 * 1024, maxFinal: 2 * 1024 * 1024 },
   AUDIO: { maxOriginal: 10 * 1024 * 1024, maxFinal: 5 * 1024 * 1024 },
-  VIDEO: { maxOriginal: 50 * 1024 * 1024, maxFinal: 15 * 1024 * 1024 },
+  VIDEO: { maxOriginal: 100 * 1024 * 1024, maxFinal: 25 * 1024 * 1024 },
 };
 
 /**
@@ -30,9 +30,10 @@ export const AUDIO_RECORDING_CONFIG = {
  * Main Utility Function to Validate & Compress Media
  * @param {string} uri - The local file URI
  * @param {'image' | 'video' | 'audio'} type - The media type
+ * @param {Function} onProgress - Optional progress callback for video compression
  * @returns {Promise<string|null>} - Returns processed URI or null if failed
  */
-export async function validateAndProcessMedia(uri, type) {
+export async function validateAndProcessMedia(uri, type, onProgress = null) {
   try {
     // 1. Check if file exists and get info
     const fileInfo = await FileSystem.getInfoAsync(uri);
@@ -73,11 +74,35 @@ export async function validateAndProcessMedia(uri, type) {
       processedUri = result.uri;
     } 
     
-    // VIDEO: Use Hardware-accelerated compression
+    // VIDEO: Smart compression - skip if already small enough
     else if (type === 'video') {
-      processedUri = await Video.compress(uri, { 
-        compressionMethod: 'auto',
-      });
+      console.log('Checking video size for compression...');
+      
+      // If video is already under 10MB, skip compression for speed
+      if (fileInfo.size <= 10 * 1024 * 1024) {
+        console.log('Video is small enough, skipping compression');
+        processedUri = uri;
+      } else {
+        console.log('Starting video compression...');
+        const startTime = Date.now();
+        
+        processedUri = await Video.compress(uri, { 
+          compressionMethod: 'manual',
+          quality: 'medium',
+          bitrate: 1500000, // 1.5Mbps - faster compression
+          maxSize: 1280, // Smaller max size for faster processing
+          getCancellationId: (cancellationId) => {
+            console.log('Video compression started with ID:', cancellationId);
+          },
+          onProgress: (progress) => {
+            console.log('Compression progress:', progress);
+            if (onProgress) onProgress(progress);
+          },
+        });
+        
+        const endTime = Date.now();
+        console.log(`Video compression completed in ${(endTime - startTime) / 1000}s`);
+      }
     }
 
     // AUDIO: Use original file without compression to prevent corruption

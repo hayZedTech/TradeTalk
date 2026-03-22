@@ -24,7 +24,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   Share,
   StyleSheet,
   Text,
@@ -32,6 +31,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 // Type alias to prevent flickering TS errors
 const FS: any = FileSystem;
@@ -46,6 +46,7 @@ import MessageItem from "./MessageItem";
 import PreparingFileOverlay from "./PreparingFileOverlay";
 import ChatOptionsModal from "../../../components/chat/ChatOptionsModal";
 import { AudioMessageBubble } from "../../../components/chat/AudioMessageBubble";
+import { VideoMessageBubble } from "../../../components/chat/VideoMessageBubble";
 import { useTheme } from "../../../contexts/ThemeContext";
 
 // ✅ Fix for inverted list stacking:
@@ -388,35 +389,119 @@ export default function ChatRoom() {
       const asset = result.assets[0];
       const type = asset.type === "video" ? "video" : "image";
 
-      // show chat-level preparing indicator immediately
-      setUiState(prev => ({ ...prev, isPreparingFile: true }));
-
-      setSending(true);
-      
-      // Add minimum processing time for better UX
-      const startTime = Date.now();
-      const processedUri = await validateAndProcessMedia(asset.uri, type);
-      const processingTime = Date.now() - startTime;
-      
-      // Ensure at least 1 second of processing time for user feedback
-      if (processingTime < 1000) {
-        await new Promise(resolve => setTimeout(resolve, 1000 - processingTime));
-      }
-      
-      setSending(false);
-
-      if (processedUri) {
-        const info = await FS.getInfoAsync(processedUri);
-        if (info.exists && checkFileSize(info.size, type)) {
-          // handleMediaSend will clear the preparing indicator when upload actually starts
-          handleMediaSend(processedUri, type);
-        } else {
-          // file invalid -> hide preparing
+      if (type === "video") {
+        // Use dedicated video upload logic
+        const videoUri = asset.uri;
+        
+        setUiState(prev => ({ ...prev, isPreparingFile: true }));
+        setSending(true);
+        
+        // Add progress tracking for video compression
+        const processedUri = await validateAndProcessMedia(videoUri, "video", (progress: number) => {
+          console.log('Video compression progress:', Math.round(progress * 100) + '%');
+        });
+        setSending(false);
+        
+        if (!processedUri) {
           setUiState(prev => ({ ...prev, isPreparingFile: false }));
+          return;
+        }
+
+        const info = await FS.getInfoAsync(processedUri);
+        if (!info.exists || !checkFileSize(info.size, "video")) {
+          setUiState(prev => ({ ...prev, isPreparingFile: false }));
+          return;
+        }
+
+        setUiState(prev => ({ ...prev, isPreparingFile: false }));
+
+        // Create temporary video message
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        const tempMessage = {
+          id: tempId,
+          chat_id: chatId,
+          sender_id: currentUserId,
+          content: "Sent a video",
+          file_url: processedUri,
+          file_type: "video",
+          created_at: new Date().toISOString(),
+          is_sending: true,
+        };
+
+        setMessages(prev => [tempMessage, ...prev]);
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+        startSimulatedProgress(tempId);
+
+        try {
+          const fileUrl = await uploadFile(processedUri, "video");
+          stopSimulatedProgress(tempId);
+
+          const payload: any = {
+            chat_id: chatId,
+            sender_id: currentUserId,
+            content: "Sent a video",
+            file_url: fileUrl,
+            file_type: "video",
+          };
+
+          if (replyingTo) payload.parent_id = replyingTo.id;
+
+          const { data, error } = await supabase
+            .from("messages")
+            .insert([payload])
+            .select()
+            .single();
+
+          if (error) throw error;
+
+          setMessages(prev => {
+            const exists = prev.some(m => m.id === data.id);
+            if (exists) {
+              return prev.filter(m => m.id !== tempId);
+            }
+            return prev.map(m => m.id === tempId ? data : m);
+          });
+
+        } catch (err) {
+          stopSimulatedProgress(tempId);
+          setMessages(prev => prev.filter(m => m.id !== tempId));
+          
+          let message = "Video upload failed";
+          if (err instanceof Error) {
+            message = err.message;
+          }
+          
+          console.error("Video upload error:", err);
+          Alert.alert("Upload Error", message);
+        } finally {
+          setReplyingTo(null);
         }
       } else {
-        // processing failed -> hide preparing
-        setUiState(prev => ({ ...prev, isPreparingFile: false }));
+        // Handle image upload (existing logic)
+        setUiState(prev => ({ ...prev, isPreparingFile: true }));
+        setSending(true);
+        
+        const startTime = Date.now();
+        const processedUri = await validateAndProcessMedia(asset.uri, type);
+        const processingTime = Date.now() - startTime;
+        
+        if (processingTime < 1000) {
+          await new Promise(resolve => setTimeout(resolve, 1000 - processingTime));
+        }
+        
+        setSending(false);
+
+        if (processedUri) {
+          const info = await FS.getInfoAsync(processedUri);
+          if (info.exists && checkFileSize(info.size, type)) {
+            handleMediaSend(processedUri, type);
+          } else {
+            setUiState(prev => ({ ...prev, isPreparingFile: false }));
+          }
+        } else {
+          setUiState(prev => ({ ...prev, isPreparingFile: false }));
+        }
       }
     }
   };
@@ -580,6 +665,12 @@ export default function ChatRoom() {
   ) => {
     if (!uri) {
       Alert.alert("Upload Error", "Missing file URI");
+      setUiState(prev => ({ ...prev, isPreparingFile: false }));
+      return;
+    }
+
+    if (!currentUserId) {
+      Alert.alert("Authentication Error", "User not authenticated");
       setUiState(prev => ({ ...prev, isPreparingFile: false }));
       return;
     }
@@ -1727,6 +1818,30 @@ export default function ChatRoom() {
                 ? messageMap.get(item.parent_id)
                 : null;
 
+              // Render video messages with dedicated VideoMessageBubble
+              if (item.file_type === 'video') {
+                return (
+                  <View key={item.id} style={{ marginVertical: 4, paddingHorizontal: 16 }}>
+                    {showDateHeader && (
+                      <Text style={[{ textAlign: 'center', fontSize: 12, marginVertical: 8 }, { color: colors.textSecondary }]}>
+                        {currentMsgDate}
+                      </Text>
+                    )}
+                    <View style={{
+                      alignSelf: item.sender_id === currentUserId ? 'flex-end' : 'flex-start',
+                      marginLeft: item.sender_id === currentUserId ? 50 : 0,
+                      marginRight: item.sender_id === currentUserId ? 0 : 50,
+                    }}>
+                      <VideoMessageBubble 
+                        sourceUri={item.file_url} 
+                        isCurrentUser={item.sender_id === currentUserId}
+                        isUploading={item.is_sending || false}
+                      />
+                    </View>
+                  </View>
+                );
+              }
+
               // Render audio messages with dedicated AudioMessageBubble
               if (item.file_type === 'audio') {
                 return (
@@ -1745,6 +1860,7 @@ export default function ChatRoom() {
                         sourceUri={item.file_url} 
                         isCurrentUser={item.sender_id === currentUserId}
                         isUploading={item.is_sending || false}
+                        fileName={item.content !== 'Voice message' ? item.content : undefined}
                       />
                     </View>
                   </View>
